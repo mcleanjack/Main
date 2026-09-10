@@ -25,23 +25,28 @@ is actually true, each point independently checked:
 | Is that per-view parameter always present? | **No.** Independently confirmed to work reliably on plan-type views; known to be absent/non-functional specifically on true Elevation-type views (Sections work fine); never present on schedules, legends, or sheets. This tool checks for it on every view and skips cleanly wherever it's missing — it never assumes. |
 | Is `VIEWER_OPTION_VISIBILITY` an officially documented, guaranteed API? | **Not fully.** There is a long-standing, still-open Autodesk "Revit Idea" (feature request) titled "API to get/set View Overrides for Design Options," asking Autodesk to formalize exactly this. That confirms the parameter-level access works in practice, but it isn't a guaranteed, first-class API — which is why this tool treats every read/write of it defensively (try/except, read-only checks, presence checks) rather than assuming success. |
 | Does `Element.DesignOption` (used in the companion View Selector tool) help here? | **No** — that property tells you which option an *element* (or, rarely, a view) was itself created inside. It is not the mechanism that controls what a view *displays*, and doesn't correspond to the VG "Design Options" tab at all. |
+| If a template locks "Design Options" (included in its Include list), can the API unlock just that one row? | **Yes.** `View.GetTemplateParameterIds()` / `GetNonControlledTemplateParameterIds()` / `SetNonControlledTemplateParameterIds()` are a real, documented API surface for toggling which rows a template controls — called on the template element itself. Adding the "Visible in Option" parameter's Id to the non-controlled set is the exact API equivalent of a human unchecking "Design Options" in Manage View Templates. This does NOT let you set *which option the template's row shows* (that part is still UI-only) — it only unlocks the row so the views underneath become independently editable. |
 
 ### Conclusion and what this tool actually does
 
-Because the Revit API cannot store or apply this setting on a View
-Template, **this tool applies the setting directly to every ordinary view
-that uses the selected template(s)**, which is the closest reliable, real
-API-based workflow, and produces exactly the end result the user wants:
-every one of those views ends up showing the chosen Design Option. It never
-pretends to modify the template element itself, and it never touches any
-other View Template or view setting (Visibility/Graphics, Filters, Object
-Styles, Detail Level, Discipline, Phase, Phase Filter, Scale, Annotation,
-Crop, Worksets, View Range, linked model settings — all untouched).
+Because the Revit API cannot store or apply *which option* a View Template
+forces, **this tool always applies the Design Option setting directly to
+every ordinary view that uses the selected template(s)**, which produces
+exactly the end result the user wants: every one of those views ends up
+showing the chosen Design Option. It never touches any other View Template
+or view setting (Visibility/Graphics, Filters, Object Styles, Detail Level,
+Discipline, Phase, Phase Filter, Scale, Annotation, Crop, Worksets, View
+Range, linked model settings — all untouched).
 
 If a view's own copy of this parameter is locked (`IsReadOnly == True`)
 because its View Template *does* have "Design Options" included/checked in
-the Revit UI, the tool reports that view as skipped with the reason, rather
-than throwing or silently failing.
+the Revit UI, there's a checkbox in the dialog — **"Unlock 'Design Options'
+on templates that currently lock it"**, on by default — that makes the
+tool unlock just that one Include row on the template (via
+`SetNonControlledTemplateParameterIds`, see the table above) before setting
+the views' values. Turn the checkbox off to keep the tool from touching
+templates at all; locked views are then reported as skipped, with the
+reason, instead.
 
 If a view has active overrides for **more than one** Design Option Set at
 once, the API gives no documented way to tell which override belongs to
@@ -80,10 +85,16 @@ pattern as the companion View Selector tool.
    - Choose a Design Option Set.
    - Choose a Design Option (or "Main Model" to clear back to Automatic) —
      this list repopulates automatically when you change the Set.
+   - Leave **"Unlock 'Design Options' on templates that currently lock
+     it"** checked (default) if you want templates that currently lock the
+     setting to be unlocked automatically so their views update too.
+     Uncheck it if you'd rather the tool never touch a template and just
+     skip any view it locks.
    - Click **Preview Changes >>**.
 5. A confirmation screen shows exactly what will happen — the templates,
-   the target Design Option, and a plain-language note that only the
-   Design Option display setting is being touched. Click **APPLY CHANGES**
+   the target Design Option, whether locked templates will be unlocked,
+   and a plain-language note that no other view/template setting is being
+   touched. Click **APPLY CHANGES**
    to proceed, **<< Back** to change your selections, or **Cancel** to
    abort with nothing modified.
 6. Revit applies the change in a single Transaction (one Undo step) and the
@@ -100,12 +111,19 @@ Re-run any time by toggling `Run` and running again.
 ```
 Floor Plan - Construction: 4 of 4 views updated.
 RCP - Construction: 2 of 2 views updated.
+Section - Construction: unlocked 'Design Options' (was locked by this template's Include list).
 Section - Construction: 1 of 3 views updated (partial).
-    skipped 'Section - Elevation Check': Locked by this view's View Template (Design Options is an included/controlled parameter)...
+    skipped 'Section - Elevation Check': Design Option visibility does not apply to this view (e.g. schedule, legend, or unsupported view type).
     skipped 'Section - Detail Callout': Design Option visibility does not apply to this view (e.g. schedule, legend, or unsupported view type).
 3D - Presentation: 0 of 1 views updated. Skipped.
     skipped '3D - Presentation View': Design Option visibility does not apply to this view (e.g. schedule, legend, or unsupported view type).
 ```
+
+(The "unlocked 'Design Options'..." line only appears when the unlock
+checkbox was on and a selected template actually was locked. With the
+checkbox off, a locked view is instead reported with the reason `Locked
+by this view's View Template (Design Options is an included/controlled
+parameter)...`.)
 
 `OUT[4]` (status message) gives the one-line summary, e.g.:
 
@@ -129,7 +147,10 @@ into further Dynamo logic.
 - A view whose `VIEWER_OPTION_VISIBILITY` parameter doesn't exist → skipped
   with an explicit reason, never an exception.
 - A view whose parameter is read-only (locked by its template's own
-  Design Options include) → skipped with an explicit reason.
+  Design Options include) → if the unlock checkbox is on, the tool
+  unlocks that one Include row on the template first and proceeds; if
+  it's off, or the unlock attempt itself fails, the view is skipped with
+  an explicit reason instead of throwing.
 - A view with ambiguous multi-Design-Option-Set overrides → skipped with an
   explicit reason rather than guessed.
 - A deleted/invalid view or template encountered mid-scan → caught per-item
@@ -171,7 +192,8 @@ Model`, `Option 1`, `Option 2`.
 | 2 | All View Templates selected via "Select All" | Every template with at least one controlled view is processed; empty templates reported as "no views currently use this template" |
 | 3 | "Main Model" chosen instead of an option | Matching views' override is cleared (`InvalidElementId`); already-cleared views reported as "unchanged" (still counted as success) |
 | 4 | A selected template controls zero views | Reported per-template as "nothing to modify", not an error |
-| 5 | A selected template has "Design Options" locked/included in the Revit UI | Its views are skipped individually with the "Locked by this view's View Template" reason; other selected templates still proceed normally |
+| 5 | A selected template has "Design Options" locked/included in the Revit UI, unlock checkbox ON (default) | The template's "Design Options" Include row is unchecked (reported explicitly), then its views update normally; no other Include row changes |
+| 5b | Same, but unlock checkbox OFF | Its views are skipped individually with the "Locked by this view's View Template" reason; the template's Include list is never touched; other selected templates still proceed normally |
 | 6 | A view under a selected template is a Schedule/Legend/Sheet-adjacent type with no such parameter | Skipped with "does not apply to this view" reason, never an exception |
 | 7 | Cancel at the first dialog | No dialog 2 shown, no transaction started, status = "Cancelled by user." |
 | 8 | Cancel at the confirmation dialog | Same as above — nothing applied |

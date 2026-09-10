@@ -25,10 +25,21 @@
 #      the selected templates.
 #   2. Setting BuiltInParameter.VIEWER_OPTION_VISIBILITY directly on each of
 #      those views.
-# It never claims to modify the View Template element itself, and it never
-# touches any other View Template setting (Visibility/Graphics, Filters,
-# Object Styles, Detail Level, Discipline, Phase, Phase Filter, Scale,
-# Annotation, Crop, Worksets, View Range, etc.).
+# By default the tool never modifies the View Template element itself, and
+# never touches any other View Template setting (Visibility/Graphics,
+# Filters, Object Styles, Detail Level, Discipline, Phase, Phase Filter,
+# Scale, Annotation, Crop, Worksets, View Range, etc.).
+#
+# The ONE opt-in exception (checkbox in the dialog, on by default): if a
+# selected template currently locks "Design Options" (that row is included
+# in the template's own Include list), the per-view parameter is read-only
+# and can't be set. When the checkbox is on, the tool unchecks that ONE
+# Include row on the template via View.SetNonControlledTemplateParameterIds
+# -- the same action as a user manually unchecking "Design Options" in
+# Manage View Templates -- so the views underneath become editable. No
+# other row in that template's Include list is touched. Turn the checkbox
+# off to keep the tool 100% read-only with respect to templates and simply
+# skip locked ones instead.
 #
 # IN[0] (optional): Boolean "Run" toggle. Defaults to True if not wired.
 # ============================================================================
@@ -91,17 +102,33 @@
 # 4. View TEMPLATES do have a "V/G Overrides Design Options" row in their
 #    own Include/controlled-parameters list in the Revit UI (Manage View
 #    Templates dialog) -- so a template CAN be configured, by a human in the
-#    UI, to lock all of its views to one Design Option. But community
-#    Autodesk documentation is explicit that "the VG settings for Design
-#    Options are not currently accessible for use in custom programming" --
-#    i.e. there is no documented way to read or set, via the API, which
-#    option a TEMPLATE forces, or to toggle whether that row is included.
-#    This tool therefore never attempts to write to the template element
-#    for this setting. It DOES read each view's own VIEWER_OPTION_VISIBILITY
-#    parameter's IsReadOnly flag before writing to it: when a template has
-#    that row included/locked for a given view, Revit reports the view's
-#    own copy of the parameter as read-only, and this tool reports that view
-#    as "skipped: locked by its View Template" instead of throwing.
+#    UI, to lock all of its views to one Design Option. Community Autodesk
+#    documentation is explicit that "the VG settings for Design Options are
+#    not currently accessible for use in custom programming" -- i.e. there
+#    is genuinely no documented way to read or set, via the API, WHICH
+#    option the template's own row forces (its "Edit" button dialog is
+#    UI-only). This tool never attempts that.
+#
+#    There IS, however, a separate and well-documented pair of API members
+#    that control whether a row is included/locked at all:
+#    View.GetTemplateParameterIds() (every parameter a template COULD
+#    control) and View.GetNonControlledTemplateParameterIds() /
+#    SetNonControlledTemplateParameterIds() (which of those it currently
+#    EXCLUDES) -- called on the template element itself. Passing the
+#    "Visible in Option" parameter's Id into the non-controlled set is
+#    exactly what a human does by unchecking "Design Options" in the
+#    template's Include list, and it's the only real API lever that exists
+#    here. This tool uses it, opt-in (checkbox, on by default), purely to
+#    unlock the row on templates where it's currently locked -- it never
+#    touches any other row in a template's Include list, and it still never
+#    tries to set which option the template's own row shows; it always sets
+#    the option on the underlying views, exactly as point 3 above.
+#
+#    Separately, this tool always reads each view's own
+#    VIEWER_OPTION_VISIBILITY parameter's IsReadOnly flag before writing to
+#    it: if the unlock checkbox is off (or the unlock attempt itself
+#    fails), a view still locked by its template is reported as "skipped:
+#    locked by its View Template" instead of throwing.
 #
 # 5. Multiple Design Option Sets in one project: because a single view can,
 #    in principle, carry more than one "Visible in Option" parameter
@@ -144,8 +171,9 @@ from Autodesk.Revit.DB import (
 )
 from RevitServices.Persistence import DocumentManager
 
+from System.Collections.Generic import List as NetList
 from System.Windows.Forms import (
-    Form, Label, ComboBox, ComboBoxStyle, Button, CheckedListBox,
+    Form, Label, ComboBox, ComboBoxStyle, Button, CheckedListBox, CheckBox,
     DialogResult, FormStartPosition, FormBorderStyle, TextBox,
     ScrollBars, MessageBox, MessageBoxButtons, MessageBoxIcon
 )
@@ -311,6 +339,56 @@ def _is_viewer_option_visibility_param(param, bip):
         return False
 
 
+def _elementid_in(eid, id_collection):
+    target = eid_to_int(eid)
+    for other in id_collection:
+        if eid_to_int(other) == target:
+            return True
+    return False
+
+
+def unlock_design_option_on_template(template):
+    """If `template` currently includes/controls the Design Option
+    visibility parameter (locking it on every view that uses the
+    template), exclude that ONE parameter from the template's controlled
+    set via View.SetNonControlledTemplateParameterIds -- the same
+    operation as unchecking just the 'Design Options' row in the
+    template's own Include list in Manage View Templates. No other row in
+    the template's Include list, and no other template/view setting, is
+    touched.
+
+    Returns (changed: bool, status: str) where status is one of:
+    "unlocked", "already_unlocked", "not_controllable", "unsupported_api",
+    "error".
+    """
+    bip = _viewer_option_visibility_bip()
+    if bip is None:
+        return False, "unsupported_api"
+    vov_id = ElementId(bip)
+
+    try:
+        controlled_ids = list(template.GetTemplateParameterIds())
+        non_controlled_ids = list(template.GetNonControlledTemplateParameterIds())
+    except Exception:
+        return False, "error"
+
+    if not _elementid_in(vov_id, controlled_ids):
+        # This template doesn't even offer a "Design Options" row (or it's
+        # already outside the controllable set) -- nothing to unlock.
+        return False, "not_controllable"
+
+    if _elementid_in(vov_id, non_controlled_ids):
+        return False, "already_unlocked"
+
+    try:
+        updated = NetList[ElementId](non_controlled_ids)
+        updated.Add(vov_id)
+        template.SetNonControlledTemplateParameterIds(updated)
+        return True, "unlocked"
+    except Exception:
+        return False, "error"
+
+
 def resolve_design_option_parameter(view, target_set_id):
     """Finds the Parameter on `view` that controls Design Option visibility
     for the target Design Option Set, disambiguating when a view exposes
@@ -397,16 +475,17 @@ def apply_design_option_to_view(view, target_set_id, target_option_id):
 
 class SelectionDialog(Form):
     def __init__(self, template_items, set_items, options_by_set_index,
-                 initial_checked=None, initial_set_idx=0, initial_option_idx=0):
+                 initial_checked=None, initial_set_idx=0, initial_option_idx=0,
+                 initial_unlock=True):
         Form.__init__(self)
         self.Text = "Design Option <-> View Template Manager"
         self.Width = 560
-        self.Height = 560
+        self.Height = 595
         self.FormBorderStyle = FormBorderStyle.FixedDialog
         self.StartPosition = FormStartPosition.CenterScreen
         self.MaximizeBox = False
         self.MinimizeBox = False
-        self.Result = None  # ("PREVIEW", checked_indices, set_idx, option_idx) | ("CANCEL",)
+        self.Result = None  # ("PREVIEW", checked_indices, set_idx, option_idx, unlock_locked_templates) | ("CANCEL",)
 
         self._options_by_set_index = options_by_set_index
 
@@ -488,6 +567,15 @@ class SelectionDialog(Form):
         self.cmb_option.Location = Point(15, y)
         self.cmb_option.Width = 410
         self.Controls.Add(self.cmb_option)
+        y += 34
+
+        self.chk_unlock = CheckBox()
+        self.chk_unlock.Text = "Unlock 'Design Options' on templates that currently lock it (edits only that one Include setting)"
+        self.chk_unlock.Font = Font("Segoe UI", 8)
+        self.chk_unlock.Location = Point(15, y)
+        self.chk_unlock.Size = Size(475, 34)
+        self.chk_unlock.Checked = initial_unlock
+        self.Controls.Add(self.chk_unlock)
         y += 40
 
         btn_preview = Button()
@@ -544,7 +632,8 @@ class SelectionDialog(Form):
             MessageBox.Show("Select a Design Option.", "Nothing selected",
                              MessageBoxButtons.OK, MessageBoxIcon.Warning)
             return
-        self.Result = ("PREVIEW", checked_indices, self.cmb_set.SelectedIndex, self.cmb_option.SelectedIndex)
+        self.Result = ("PREVIEW", checked_indices, self.cmb_set.SelectedIndex, self.cmb_option.SelectedIndex,
+                       self.chk_unlock.Checked)
         self.DialogResult = DialogResult.OK
         self.Close()
 
@@ -692,18 +781,20 @@ try:
             initial_checked = None
             initial_set_idx = 0
             initial_option_idx = 0
+            initial_unlock = True
             final_result = None
 
             while True:
                 dlg1 = SelectionDialog(template_items, set_items, options_by_set_index,
-                                        initial_checked, initial_set_idx, initial_option_idx)
+                                        initial_checked, initial_set_idx, initial_option_idx,
+                                        initial_unlock)
                 dlg1.ShowDialog()
 
                 if dlg1.Result is None or dlg1.Result[0] == "CANCEL":
                     final_result = ("CANCEL",)
                     break
 
-                _, checked_indices, set_idx, option_idx = dlg1.Result
+                _, checked_indices, set_idx, option_idx, unlock_locked_templates = dlg1.Result
                 selected_templates = [template_lookup[i] for i in checked_indices]
                 target_set = set_lookup[set_idx]
                 target_option = option_lookups.get(set_idx, [None])[option_idx]
@@ -719,19 +810,29 @@ try:
                 preview_lines.append("  {0} -> {1}".format(safe_name(target_set, "<unnamed set>"), option_label))
                 preview_lines.append("")
                 preview_lines.append("This will update the 'Visible in Option' setting on every ordinary")
-                preview_lines.append("view assigned to the templates above. The templates themselves and")
-                preview_lines.append("all other view settings are left untouched.")
+                preview_lines.append("view assigned to the templates above. All other view/template")
+                preview_lines.append("settings are left untouched.")
+                preview_lines.append("")
+                if unlock_locked_templates:
+                    preview_lines.append("If a template currently LOCKS 'Design Options' (included in its")
+                    preview_lines.append("own Include list), that one Include row will be unchecked on the")
+                    preview_lines.append("template so its views can be updated. Nothing else in the")
+                    preview_lines.append("template's Include list is touched.")
+                else:
+                    preview_lines.append("Templates that currently lock 'Design Options' will have their")
+                    preview_lines.append("views skipped (unlock option is OFF).")
 
                 dlg2 = ConfirmDialog("\n".join(preview_lines))
                 dlg2.ShowDialog()
 
                 if dlg2.Result == "APPLY":
-                    final_result = ("APPLY", selected_templates, target_set, target_option)
+                    final_result = ("APPLY", selected_templates, target_set, target_option, unlock_locked_templates)
                     break
                 elif dlg2.Result == "BACK":
                     initial_checked = checked_indices
                     initial_set_idx = set_idx
                     initial_option_idx = option_idx
+                    initial_unlock = unlock_locked_templates
                     continue
                 else:
                     final_result = ("CANCEL",)
@@ -740,7 +841,7 @@ try:
             if final_result[0] == "CANCEL":
                 status_message = "Cancelled by user. No changes made."
             else:
-                _, selected_templates, target_set, target_option = final_result
+                _, selected_templates, target_set, target_option, unlock_locked_templates = final_result
                 target_set_id = target_set.Id
                 target_option_id = target_option.Id if target_option is not None else None
 
@@ -749,6 +850,18 @@ try:
                     t.Start()
                     for template in selected_templates:
                         processed_templates.append(template)
+                        template_name = safe_name(template, "<unnamed template>")
+
+                        if unlock_locked_templates:
+                            try:
+                                changed, unlock_status = unlock_design_option_on_template(template)
+                            except Exception as ex:
+                                changed, unlock_status = False, "error: {0}".format(ex)
+                            if changed:
+                                report_lines.append("{0}: unlocked 'Design Options' (was locked by this template's Include list).".format(template_name))
+                            elif unlock_status == "error":
+                                debug_info.append("{0}: failed to unlock 'Design Options': {1}".format(template_name, unlock_status))
+
                         controlled_views = get_views_using_template(template.Id)
                         updated_here = 0
                         skipped_here = []
@@ -767,7 +880,6 @@ try:
                             else:
                                 errors_here.append((safe_name(v), r["reason"]))
 
-                        template_name = safe_name(template, "<unnamed template>")
                         total = len(controlled_views)
 
                         if total == 0:
