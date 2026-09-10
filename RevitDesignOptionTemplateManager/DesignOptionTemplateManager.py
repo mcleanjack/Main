@@ -40,12 +40,15 @@
 # Autodesk Revit API forum, and the Rhino.Inside.Revit Design Options guide:
 #
 # 1. Design Option Sets and Design Options are ordinary elements:
-#      - Autodesk.Revit.DB.DesignOptionSet  (an Element; project browser
-#        groups these, no dedicated get/set API beyond Name and Id)
-#      - Autodesk.Revit.DB.DesignOption     (an Element; has .IsPrimary
-#        (read-only in the public API) and a Name; its parent Set is found
-#        via the BuiltInParameter.OPTION_SET_ID parameter, resolved with
-#        Document.GetElement)
+#      - Design Option Set: there is NO dedicated DesignOptionSet class in
+#        the API at all -- it's a plain Element, only identifiable by its
+#        category (BuiltInCategory.OST_DesignOptionSets). Collect with
+#        FilteredElementCollector(doc).OfCategory(OST_DesignOptionSets).
+#      - Autodesk.Revit.DB.DesignOption IS a real, dedicated class (has
+#        .IsPrimary, read-only in the public API, and a Name); its parent
+#        Set is found via the BuiltInParameter.OPTION_SET_ID parameter,
+#        resolved with Document.GetElement -- there is no direct object
+#        reference from an option to its set.
 #    "There is very limited support for Design Options in the Revit API" is
 #    stated explicitly in Autodesk/partner documentation -- this is not a
 #    guess, it's the documented state of the API.
@@ -137,7 +140,7 @@ clr.AddReference('System.Drawing')
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, View, ViewType, ElementId, DesignOption,
-    DesignOptionSet, BuiltInParameter, StorageType, Transaction
+    BuiltInCategory, BuiltInParameter, StorageType, Transaction
 )
 from RevitServices.Persistence import DocumentManager
 
@@ -238,8 +241,17 @@ def collect_view_templates():
 
 
 def collect_design_option_sets():
+    # There is no dedicated DesignOptionSet class in the Revit API -- a
+    # Design Option Set is a plain Element, only distinguishable by its
+    # category (OST_DesignOptionSets). This matches the documented "very
+    # limited support for design options in the Revit API".
     try:
-        return list(FilteredElementCollector(doc).OfClass(DesignOptionSet).ToElements())
+        return list(
+            FilteredElementCollector(doc)
+            .OfCategory(BuiltInCategory.OST_DesignOptionSets)
+            .WhereElementIsNotElementType()
+            .ToElements()
+        )
     except Exception as ex:
         debug_info.append("Failed to collect design option sets: {0}".format(ex))
         return []
