@@ -67,6 +67,9 @@
 #          this height. Blank = automatic: the view's cut plane first,
 #          then heights up the whole wall (so a line through a window or
 #          door still finds the wall above the head / below the sill).
+#          If no height is wired in (IN[5] or a number on IN[0]), a pop-up
+#          asks for it each run, remembering the last value, with an
+#          "Automatic" tick box.
 #
 # Re-running: Dynamo normally only re-runs a node when one of its inputs
 # changes. In Manual run mode this script flags its own node after each
@@ -80,6 +83,8 @@
 
 import clr
 import math
+import os
+import tempfile
 import traceback
 
 clr.AddReference('RevitAPI')
@@ -918,6 +923,120 @@ def dimension_group(view, axis, members, dim_type, include_number, rooms,
 
 
 # ----------------------------------------------------------------------------
+# Pop-up: wall pick-up height
+# ----------------------------------------------------------------------------
+
+SETTINGS_FILE = os.path.join(tempfile.gettempdir(),
+                             "AutoDimension_settings.txt")
+CANCELLED = object()
+
+
+def load_last_height():
+    """Last height typed in the pop-up ("" = automatic)."""
+    try:
+        with open(SETTINGS_FILE) as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def save_last_height(text):
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            f.write(text)
+    except Exception:
+        pass
+
+
+def ask_pick_height():
+    """Pop-up asking for the wall pick-up height. Returns a height in mm,
+    None for automatic, or CANCELLED. Built from a plain Form (no
+    subclass) so it works on both the CPython3 and IronPython engines."""
+    clr.AddReference('System.Windows.Forms')
+    clr.AddReference('System.Drawing')
+    from System.Windows.Forms import (
+        Form, Label, TextBox, CheckBox, Button, DialogResult,
+        FormStartPosition, FormBorderStyle, MessageBox)
+    from System.Drawing import Point, Size
+
+    last = load_last_height()
+
+    form = Form()
+    form.Text = "Auto-Dimension"
+    form.ClientSize = Size(380, 170)
+    form.StartPosition = FormStartPosition.CenterScreen
+    form.FormBorderStyle = FormBorderStyle.FixedDialog
+    form.MaximizeBox = False
+    form.MinimizeBox = False
+    form.TopMost = True     # don't open hidden behind Revit / Dynamo
+
+    label = Label()
+    label.Text = "Wall pick-up height above the view's level (mm):"
+    label.Location = Point(15, 15)
+    label.Size = Size(350, 20)
+    form.Controls.Add(label)
+
+    box = TextBox()
+    box.Location = Point(15, 40)
+    box.Size = Size(120, 22)
+    box.Text = last
+    form.Controls.Add(box)
+
+    auto = CheckBox()
+    auto.Text = ("Automatic (cut plane, then up the whole wall - finds "
+                 "walls through windows and doors)")
+    auto.Location = Point(15, 72)
+    auto.Size = Size(350, 36)
+    auto.Checked = (last == "")
+    box.Enabled = not auto.Checked
+    form.Controls.Add(auto)
+
+    def on_auto_changed(sender, args):
+        box.Enabled = not auto.Checked
+        if box.Enabled:
+            box.Focus()
+    auto.CheckedChanged += on_auto_changed
+
+    ok = Button()
+    ok.Text = "OK - pick lines"
+    ok.Location = Point(165, 125)
+    ok.Size = Size(110, 30)
+    form.Controls.Add(ok)
+
+    cancel = Button()
+    cancel.Text = "Cancel"
+    cancel.Location = Point(285, 125)
+    cancel.Size = Size(80, 30)
+    cancel.DialogResult = DialogResult.Cancel
+    form.Controls.Add(cancel)
+
+    form.AcceptButton = ok
+    form.CancelButton = cancel
+
+    def on_ok(sender, args):
+        if not auto.Checked:
+            value = height_mm(box.Text)
+            if value is None or value <= 0:
+                MessageBox.Show("Enter a height in mm greater than 0, "
+                                "e.g. 1200, or tick Automatic.",
+                                "Auto-Dimension")
+                box.Focus()
+                return      # keep the pop-up open
+        form.DialogResult = DialogResult.OK
+        form.Close()
+    ok.Click += on_ok
+
+    if form.ShowDialog() != DialogResult.OK:
+        return CANCELLED
+    if auto.Checked:
+        save_last_height("")
+        return None
+    text = box.Text.strip()
+    save_last_height(text)
+    return height_mm(text)
+
+
+# ----------------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------------
 
@@ -938,6 +1057,18 @@ def main():
     in0_height = next((height_mm(e) for e in raw_in0
                        if isinstance(e, (int, float))
                        and not isinstance(e, bool)), None)
+
+    # Wall pick-up height: IN[5], else a number on IN[0], else ask in a
+    # pop-up (remembers the last value).
+    pick_height = height_mm(_in(5))
+    if pick_height is None:
+        pick_height = in0_height
+    if pick_height is None:
+        answer = ask_pick_height()
+        if answer is CANCELLED:
+            return [], "Cancelled. Nothing done."
+        pick_height = answer
+
     if not elements:
         elements = pick_lines()
     if not elements:
@@ -953,9 +1084,6 @@ def main():
     include_number = bool(_in(2, False))
     delete_line = bool(_in(3, False))
     include_others = bool(_in(4, False))
-    pick_height = height_mm(_in(5))
-    if pick_height is None:
-        pick_height = in0_height
     pick_z = (get_level_z(view) + pick_height * MM
               if pick_height is not None else None)
     if pick_height is not None:

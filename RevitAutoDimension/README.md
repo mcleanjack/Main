@@ -191,13 +191,36 @@ Add input ports to the Python node with the **+** button until it has six
 | `IN[4]` | **Boolean** | Walls with **no** Structure layer: `False` (default) = skip them, `True` = dimension to their core (or finished) faces. |
 | `IN[5]` | **Number** | **Wall pick-up height** in mm above the view's level, e.g. `1200`. Walls are only picked up where your line crosses them at this height. For automatic, remove this port (**−** button) or wire an empty **String** node, because an unconnected port stops the node running. See below. |
 
-**Wall pick-up height (`IN[5]`, or a Number on `IN[0]`)**
+**Wall pick-up height: pop-up**
+
+If no height is wired into the node, a small **Auto-Dimension** window pops
+up each time you run it, **before** you pick the lines:
+
+```
+ ┌ Auto-Dimension ────────────────────────────────────┐
+ │ Wall pick-up height above the view's level (mm):   │
+ │ [ 1200      ]                                      │
+ │ [ ] Automatic (cut plane, then up the whole wall)  │
+ │                      [OK - pick lines]  [Cancel]   │
+ └────────────────────────────────────────────────────┘
+```
+
+- Type a height (e.g. `1200`) or tick **Automatic**, then press **OK**
+  (or Enter). You're then asked to pick the lines.
+- It **remembers your last setting**, so usually you just press Enter.
+- **Cancel** stops the run without doing anything.
+- The window stays on top of Revit/Dynamo. If you don't see it, check the
+  taskbar.
+- To skip the pop-up, wire the height in instead (below). A wired height
+  always wins over the pop-up.
+
+**Wall pick-up height: wired in (`IN[5]`, or a Number on `IN[0]`)**
 
 Quickest setup: wire a **Number** node straight into `IN[0]`, e.g.
 `1200`. A number on `IN[0]` means "pick the lines on screen" *and* "use
 this pick-up height", so you don't need six ports. If both are wired,
-`IN[5]` wins. A **Boolean** on `IN[0]` (or `IN[5]` removed / blank) means
-automatic height.
+`IN[5]` wins. A **Boolean** on `IN[0]` (with `IN[5]` removed or blank) means
+"no height wired", so the **pop-up** asks for it.
 
 - **Blank (automatic)**, i.e. port removed or an empty String wired in: walls are picked up at the view's cut-plane
   height. If the line misses a wall there (e.g. it passes through a
