@@ -16,7 +16,12 @@
 #      dimensions ONLY to the faces of its Structure [1] layer(s), as set
 #      in the wall type (Edit Type > Structure > Edit, Function column),
 #      e.g. the 90mm timber frame, not the plasterboard either side.
-#      Walls with no Structure layer are skipped (IN[4] can include them).
+#      EXTERNAL walls (wall type Function = Exterior) also get their outer
+#      face, e.g. the outside of the brick, so the string reads
+#      outside of brick > frame > rooms. A brick skin modelled as its own
+#      external wall (no Structure layer) gives just its outer face.
+#      Other walls with no Structure layer are skipped (IN[4] can include
+#      them).
 #   3. Creates ONE continuous linear dimension string through all of those
 #      faces. Lines drawn as a connected stepped path (ends touching) are
 #      treated as one: all the runs going the same direction are merged
@@ -76,7 +81,7 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import (
     FilteredElementCollector, Wall, WallKind, CurveElement, Line, XYZ,
     UV, Reference, ReferenceArray, SubTransaction, HostObjectUtils,
-    ShellLayerType, PlanarFace, MaterialFunctionAssignment,
+    ShellLayerType, PlanarFace, MaterialFunctionAssignment, WallFunction,
     ViewPlan, PlanViewPlane, DimensionType, DimensionStyleType,
     BuiltInParameter
 )
@@ -382,6 +387,20 @@ def wall_layers(wall):
             cs.GetFirstCoreLayerIndex(), cs.GetLastCoreLayerIndex())
 
 
+def is_external(wall):
+    """True if the wall's type has Function = Exterior
+    (Edit Type > Construction > Function)."""
+    try:
+        return wall.WallType.Function == WallFunction.Exterior
+    except Exception:
+        pass
+    try:
+        p = wall.WallType.get_Parameter(BuiltInParameter.FUNCTION_PARAM)
+        return p is not None and p.AsInteger() == int(WallFunction.Exterior)
+    except Exception:
+        return False
+
+
 def structure_offsets(layers):
     """Distances in from the exterior finish face to the faces of the
     wall's Structure [1] layers, or None if it has none. Adjacent
@@ -490,8 +509,10 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
     Reference) for every wall face to dimension along the line.
 
     Each wall is dimensioned to the faces of its Structure [1] layer(s).
-    Walls without one are skipped, unless include_others is True, in
-    which case they use their core faces, or failing that finished faces."""
+    External walls (type Function = Exterior) also get their outer face.
+    Other walls without a Structure layer are skipped, unless
+    include_others is True, in which case they use their core faces, or
+    failing that finished faces."""
     cut_z = get_cut_plane_z(view)
     level_z = get_level_z(view)
     zs_base = [cut_z, level_z + ROOM_PROBE_HEIGHT]
@@ -515,6 +536,15 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
         layers = wall_layers(wall)
         clean = layers is not None and len(ext) == 1 and len(inn) == 1
 
+        # External walls also get their outer (exterior finished) face,
+        # e.g. the outside of the brick. It's a real face of the wall, so
+        # the dimension stays attached to it.
+        outer = None
+        if len(ext) == 1 and is_external(wall):
+            outer = (ext[0][0], ext[0][2])
+            hits.append(outer)
+            stats["outer"] += 1
+
         offsets = structure_offsets(layers) if clean else None
         if offsets:
             res = offset_hits(wall, view, dim_line, ext[0], inn[0], layers,
@@ -534,8 +564,15 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
         else:
             why = "no Structure layer"
         if not include_others:
-            notes.append("Wall %s skipped (%s)" % (wall.Id, why))
-            stats["skipped"] += 1
+            if outer is not None:
+                # e.g. a brick skin modelled as its own wall: its outer
+                # face is all that's wanted from it.
+                if why != "no Structure layer":
+                    notes.append("Wall %s: outer face only (%s)"
+                                 % (wall.Id, why))
+            else:
+                notes.append("Wall %s skipped (%s)" % (wall.Id, why))
+                stats["skipped"] += 1
             continue
 
         if clean:
@@ -686,7 +723,8 @@ def dimension_group(view, axis, members, dim_type, include_number, phase,
     """One dimension string for a group of parallel, connected lines.
     Returns (Dimension or None, message)."""
     notes = []
-    stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0}
+    stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0,
+             "outer": 0}
     hits = group_hits(view, axis, members, include_others, stats, notes)
     ids = ", ".join(str(line.element.Id) for line in members)
     label = "Line" if len(members) == 1 else "Lines"
@@ -725,7 +763,8 @@ def dimension_group(view, axis, members, dim_type, include_number, phase,
             seg.Below = name
             labelled += 1
 
-    parts = ["%d on Structure layer" % stats["structure"]]
+    parts = ["%d on Structure layer" % stats["structure"],
+             "%d external with outer face" % stats["outer"]]
     if include_others:
         parts.append("%d on core" % stats["core"])
         parts.append("%d on finish faces" % stats["finish"])

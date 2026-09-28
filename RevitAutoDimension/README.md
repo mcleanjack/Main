@@ -78,6 +78,28 @@ So in each wall type, put the two *Core Boundary* rows **directly either
 side of the Structure layer**. The dimensions then attach to the wall and
 update if it moves or changes type.
 
+### External walls: outer face
+
+For walls whose type has **Function = Exterior** (*Edit Type → Construction
+→ Function*), the string also picks up the wall's **outer face**, e.g. the
+outside of the brick. The outer face is the wall's exterior finished face,
+so the dimension stays attached to the wall.
+
+| External wall modelled as... | String picks up |
+|---|---|
+| **One wall type**: brick + cavity + Structure frame + plasterboard | outside of brick → frame → frame, e.g. `160 │ 90` |
+| **Two walls**: a brick skin wall (no Structure layer) + a framed wall | outside of brick (from the brick wall) → frame → frame (from the framed wall) |
+| **A brick wall whose brick layer is Structure [1]** (e.g. a 150 mm brick wall type) | outside of brick → inside of brick |
+
+Check these before you run it:
+- **Internal wall types must have Function = Interior.** Any wall type set
+  to *Exterior* gets the extra outer-face point. The report counts them
+  (`N external with outer face`), so a wrong type shows up quickly.
+- **External walls must face the right way.** The outer face is the
+  wall's *exterior* side. If a wall was drawn inside-out, the string picks
+  up the plasterboard face instead. Select the wall and press the flip
+  arrows (or spacebar) to fix it.
+
 ### Core faces
 
 The Revit API has **no documented method** for getting a reference to a
@@ -224,7 +246,7 @@ Tips:
 | Fewer than 2 faces hit | No dimension is made for that line/run, and the report says so. That's normal for a jog between runs. |
 | Line not straight / not a line | `FAILED` with a message saying why. |
 | Room not placed or unbounded | That segment has no label. |
-| Wall with no Structure layer | Skipped and named in the report, or dimensioned to its core/finished faces if `IN[4] = True`. |
+| Wall with no Structure layer | External (Function = Exterior): its outer face only. Otherwise skipped and named in the report, or dimensioned to its core/finished faces if `IN[4] = True`. |
 | Structure layer not bounded by the core | Skipped and named in the report. Fix the wall type's Core Boundary rows (see section 2). |
 | Rooms on a different phase | Labels come from the view's phase, so a demolition-phase view shows existing rooms. |
 
@@ -251,8 +273,12 @@ Tips:
    You should get **one** string with every wall either run crosses, and
    room names from the run that passes through each room. Also try two
    separate lines (one horizontal, one vertical): you get two strings.
-6. A line through a window and an internal door. Both host walls should
+6. A line across an external brick wall. The string should start at the
+   **outside of the brick**, then pick up the frame. Check an internal
+   wall doesn't get an extra point; if it does, its type's Function is
+   set to Exterior.
+7. A line through a window and an internal door. Both host walls should
    read their framing size, e.g. 90.
-7. A line that ends inside a room. Walls beyond its end should be ignored.
-8. A diagonal line. The report should show fewer faces, or `FAILED`.
-9. Run it, then press Ctrl+Z once. Everything created should be gone.
+8. A line that ends inside a room. Walls beyond its end should be ignored.
+9. A diagonal line. The report should show fewer faces, or `FAILED`.
+10. Run it, then press Ctrl+Z once. Everything created should be gone.
