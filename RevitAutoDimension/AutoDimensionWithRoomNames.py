@@ -113,6 +113,9 @@ doc = DocumentManager.Instance.CurrentDBDocument
 uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
+# Shown at the top of the report, so you can check which copy is running.
+SCRIPT_VERSION = "2026-09-28 core-search"
+
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
 PARALLEL_COS = math.cos(math.radians(1.0))   # face must be within 1 deg of
@@ -1110,7 +1113,7 @@ def main():
 
     dim_type_name = _in(1)
     dim_type = find_dimension_type(dim_type_name)
-    report = []
+    report = ["Auto-Dimension script version %s" % SCRIPT_VERSION]
     if dim_type_name and dim_type is None:
         report.append("Dimension type '%s' not found; used the default."
                       % dim_type_name)
