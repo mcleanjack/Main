@@ -141,9 +141,15 @@ The report names each skipped wall and why, e.g.
 1. In Revit, open **Manage → Dynamo** and start a new graph.
 2. Add a **Python Script** node and paste in all of
    `AutoDimensionWithRoomNames.py`.
-3. Set Dynamo to **Manual** run mode (bottom left). This matters because the
+3. **Don't leave `IN[0]` unconnected.** Dynamo won't run a node while
+   any of its input ports is empty (the port shows a red bar). Either:
+   - wire a **Boolean** node into `IN[0]`. Its value is ignored and you
+     still pick lines on screen; or
+   - click the **−** button on the node to remove `IN[0]`.
+4. Set Dynamo to **Manual** run mode (bottom left). This matters because the
    on-screen pick doesn't work well in Automatic mode.
-4. Save it as `AutoDimension.dyn`.
+5. Save it as `AutoDimension.dyn` in a **trusted location** (see
+   *"Run blocked."* below).
 
 When it runs, Revit asks you to click the line(s). Click as many as you
 like, then click **Finish** on the Options Bar (or press Enter).
@@ -159,6 +165,18 @@ like, then click **Finish** on the Options Bar (or press Enter).
 > reach the node), run the saved graph from *Manage → Dynamo Player*
 > instead. Player re-runs the whole graph each time you press Play.
 
+> **"Run blocked."** next to the Run button is Dynamo's **file security
+> check**, not the script. Dynamo blocks a graph opened from a folder that
+> isn't in its trusted locations (e.g. Downloads, Desktop, a network
+> drive) until you answer its *"Open external file? This file is stored in
+> an untrusted location"* prompt. To fix it for good, do either of these:
+> - Re-open the `.dyn`. When the prompt appears, tick **"Trust this
+>   file's location in the future"** and click **Yes**.
+> - In Dynamo, go to **Settings → Preferences → Security → Trusted File
+>   Locations** and add the folder the `.dyn` is saved in.
+>
+> Then close and re-open the graph.
+
 **Full: with options**
 
 Add input ports to the Python node with the **+** button until it has five
@@ -166,7 +184,7 @@ Add input ports to the Python node with the **+** button until it has five
 
 | Port | Node | Purpose |
 |---|---|---|
-| `IN[0]` | **Select Model Elements** (or *Select Model Element*) | The line(s) you drew. Connected lines make one string per direction; separate lines make one string each (see *Stepped lines* below). Leave it unwired to pick on screen instead. |
+| `IN[0]` | **Select Model Elements** (or *Select Model Element*) | The line(s) you drew. Connected lines make one string per direction; separate lines make one string each (see *Stepped lines* below). Wire a **Boolean** instead to pick on screen. |
 | `IN[1]` | **String** | Dimension type name, e.g. `Linear - 2.5mm Arial`. Leave blank for the default. |
 | `IN[2]` | **Boolean** | `True` = "101 Kitchen", `False` = "Kitchen". |
 | `IN[3]` | **Boolean** | `True` deletes the sketch line after dimensioning. |
@@ -177,14 +195,14 @@ for each new line. Otherwise the run re-dimensions the same line. If
 `IN[3]` deleted the line, the report says it no longer exists.
 
 A Boolean (e.g. a "Run" toggle) wired into `IN[0]` is ignored, and you're
-asked to pick lines on screen, the same as leaving it unwired. You don't
+asked to pick lines on screen. You don't
 need a Run toggle at all.
 
 Wire the output into a **Watch** node. `OUT[0]` is the list of new
 dimensions and `OUT[1]` is a text report.
 
 **Dynamo Player:** to make the inputs editable in Player, right-click each
-input node and choose **Is Input**. With `IN[0]` unwired, Player runs become
+input node and choose **Is Input**. With a Boolean on `IN[0]`, Player runs become
 "click Run → click the line(s) → Finish → done".
 
 ---
