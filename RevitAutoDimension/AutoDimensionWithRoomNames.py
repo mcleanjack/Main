@@ -17,8 +17,12 @@
 #      in the wall type (Edit Type > Structure > Edit, Function column),
 #      e.g. the 90mm timber frame, not the plasterboard either side.
 #      Walls with no Structure layer are skipped (IN[4] can include them).
-#   3. Creates ONE continuous linear dimension string along the drawn line
-#      through all of those faces.
+#   3. Creates ONE continuous linear dimension string through all of those
+#      faces. Lines drawn as a connected stepped path (ends touching) are
+#      treated as one: all the runs going the same direction are merged
+#      into one string on the longest run, picking up every wall any of
+#      them cross. A short jog between runs that crosses no walls is
+#      ignored. Separate (unconnected) lines each get their own string.
 #   4. For each segment of the string, looks up the Room at the segment's
 #      midpoint and writes the room name into that segment's "Below" text,
 #      so the room name sits underneath the numeric value. Segments that
@@ -40,7 +44,8 @@
 # Inputs (all optional):
 #   IN[0]  Line element(s): a Detail Line / Model Line, or a list of them,
 #          e.g. from "Select Model Element(s)". If nothing is wired, you are
-#          asked to click a line in the active view when the graph runs.
+#          asked to click the line(s) in the active view when the graph
+#          runs; click Finish on the Options Bar (or press Enter) when done.
 #   IN[1]  Dimension type name (string), e.g. "Linear - 2.5mm Arial". Blank
 #          = the project's default linear dimension type.
 #   IN[2]  Include room number (bool). True gives "101 Kitchen". Default
@@ -57,7 +62,7 @@
 #
 # Output (OUT):
 #   [0] list of created Dimension elements
-#   [1] status / report text (one line per input line, plus skips)
+#   [1] status / report text (one line per dimension string, plus skips)
 # ============================================================================
 
 import clr
@@ -95,6 +100,7 @@ PARALLEL_COS = math.cos(math.radians(1.0))   # face must be within 1 deg of
                                              # perpendicular to the line
 ROOM_PROBE_HEIGHT = 1.0      # probe rooms 1 ft above the view's level
 FACE_Z_SAMPLES = 24          # heights tried up each wall face (openings)
+CONNECT_TOL = 0.1            # ~30 mm: line ends this close are "connected"
 CORE_CHECK_TOL = 0.002       # ~0.6 mm: core ref must measure within this
 # "<UniqueId>:-9999:<n>" indices tried for core faces (see core_reference).
 # Community findings: 1 = wall centre, 2/3 = the two core faces,
@@ -226,16 +232,18 @@ def find_room(point_xy, room_z, phase):
 # ----------------------------------------------------------------------------
 
 def pick_lines():
-    """Ask the user to click a line in the active view."""
+    """Ask the user to click one or more lines in the active view, then
+    Finish (on the Options Bar) or press Enter."""
     if uidoc is None:
         return []
     try:
-        ref = uidoc.Selection.PickObject(
+        refs = uidoc.Selection.PickObjects(
             ObjectType.Element,
-            "Auto-Dimension: pick the line you drew across the walls")
+            "Auto-Dimension: pick the line(s) you drew across the walls, "
+            "then click Finish")
     except OperationCanceledException:
         return []
-    return [doc.GetElement(ref.ElementId)]
+    return [doc.GetElement(ref.ElementId) for ref in refs]
 
 
 def line_from_element(element):
@@ -554,55 +562,168 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
 
 
 # ----------------------------------------------------------------------------
+# Grouping the drawn lines
+# ----------------------------------------------------------------------------
+
+class DrawnLine(object):
+    """One selected line, flattened to plan. a / b / s_a / s_b are set
+    along its group's axis once grouped (see direction_groups)."""
+    def __init__(self, element, curve):
+        self.element = element
+        self.p0 = flat(curve.GetEndPoint(0))
+        self.p1 = flat(curve.GetEndPoint(1))
+        self.z = curve.GetEndPoint(0).Z
+        self.length = self.p0.DistanceTo(self.p1)
+        self.a = self.b = None
+        self.s_a = self.s_b = 0.0
+
+
+def canonical_direction(line):
+    """Unit direction of the line, flipped to point +X (or +Y if vertical)
+    so parallel lines drawn either way round get the same axis."""
+    d = line.p1.Subtract(line.p0).Normalize()
+    if d.X < -1e-9 or (abs(d.X) <= 1e-9 and d.Y < 0):
+        d = d.Negate()
+    return d
+
+
+def connected_chains(lines):
+    """Split lines into chains whose ends touch (within CONNECT_TOL), like
+    a stepped path drawn as several lines. A line touching no other line
+    is a chain on its own."""
+    parent = list(range(len(lines)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            ends_i = (lines[i].p0, lines[i].p1)
+            ends_j = (lines[j].p0, lines[j].p1)
+            if any(p.DistanceTo(q) < CONNECT_TOL
+                   for p in ends_i for q in ends_j):
+                parent[root(i)] = root(j)
+    chains = {}
+    order = []
+    for i, line in enumerate(lines):
+        key = root(i)
+        if key not in chains:
+            chains[key] = []
+            order.append(key)
+        chains[key].append(line)
+    return [chains[key] for key in order]
+
+
+def direction_groups(chain):
+    """Split one chain into groups of parallel lines; each group becomes
+    one dimension string. Returns [(axis, [DrawnLine, ...]), ...] with each
+    line's a / b (ordered along the axis) and s_a / s_b (distance of its
+    ends along the axis) set."""
+    groups = []
+    for line in chain:
+        d = canonical_direction(line)
+        for axis, members in groups:
+            if abs(axis.DotProduct(d)) >= PARALLEL_COS:
+                members.append(line)
+                break
+        else:
+            groups.append((d, [line]))
+
+    for axis, members in groups:
+        origin = members[0].p0
+        for line in members:
+            if line.p1.Subtract(line.p0).DotProduct(axis) >= 0:
+                line.a, line.b = line.p0, line.p1
+            else:
+                line.a, line.b = line.p1, line.p0
+            line.s_a = line.a.Subtract(origin).DotProduct(axis)
+            line.s_b = line.s_a + line.length
+    return groups
+
+
+# ----------------------------------------------------------------------------
 # Building the dimension
 # ----------------------------------------------------------------------------
 
-def dimension_along_line(view, line_elem, dim_type, include_number,
-                         phase, room_z, include_others):
-    curve = line_from_element(line_elem)
-    a = flat(curve.GetEndPoint(0))
-    b = flat(curve.GetEndPoint(1))
-    direction = b.Subtract(a).Normalize()
+def group_hits(view, axis, members, include_others, stats, notes):
+    """Every wall face crossed by any line in the group, as a sorted,
+    de-duplicated list of (s, Reference), s = distance along the axis."""
+    hits = []
+    for line in members:
+        dim_line = Line.CreateBound(XYZ(line.a.X, line.a.Y, line.z),
+                                    XYZ(line.b.X, line.b.Y, line.z))
+        for t, ref in collect_face_hits(view, line.a, line.b, axis,
+                                        dim_line, include_others,
+                                        stats, notes):
+            hits.append((line.s_a + t, ref))
+    hits.sort(key=lambda h: h[0])
+    deduped = []
+    for s, ref in hits:
+        if deduped and abs(s - deduped[-1][0]) < DEDUP_TOL:
+            continue    # same face crossed by two of the lines
+        deduped.append((s, ref))
+    return deduped
 
-    # Dimension line sits exactly where the user drew it.
-    dim_line = Line.CreateBound(curve.GetEndPoint(0), curve.GetEndPoint(1))
 
+def room_probe(point, axis, members):
+    """Where to look up the room for a dimension segment centred at
+    `point`: on whichever drawn line covers that stretch of the string, so
+    a stepped path labels the rooms it actually passes through."""
+    p = flat(point)
+    first = members[0]
+    s = p.Subtract(first.a).DotProduct(axis) + first.s_a
+    for line in members:
+        if line.s_a - DEDUP_TOL <= s <= line.s_b + DEDUP_TOL:
+            return line.a.Add(axis.Multiply(s - line.s_a))
+    return p
+
+
+def dimension_group(view, axis, members, dim_type, include_number, phase,
+                    room_z, include_others):
+    """One dimension string for a group of parallel, connected lines.
+    Returns (Dimension or None, message)."""
     notes = []
     stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0}
-    hits = collect_face_hits(view, a, b, direction, dim_line,
-                             include_others, stats, notes)
+    hits = group_hits(view, axis, members, include_others, stats, notes)
+    ids = ", ".join(str(line.element.Id) for line in members)
+    label = "Line" if len(members) == 1 else "Lines"
     if len(hits) < 2:
-        raise ValueError(
-            "Line %s found %d wall face(s) to dimension; need at least 2. "
-            "Check the line runs perpendicular to the walls and fully "
-            "through them." % (line_elem.Id, len(hits)))
+        return None, ("%s %s: %d wall face(s) found, no dimension made "
+                      "(fine for a short jog between runs)."
+                      % (label, ids, len(hits)))
+
+    # The string sits on the longest line, stretched to cover them all.
+    host = max(members, key=lambda line: line.length)
+    s_min = min(line.s_a for line in members)
+    s_max = max(line.s_b for line in members)
+    p_start = host.a.Add(axis.Multiply(s_min - host.s_a))
+    p_end = host.a.Add(axis.Multiply(s_max - host.s_a))
+    dim_line = Line.CreateBound(XYZ(p_start.X, p_start.Y, host.z),
+                                XYZ(p_end.X, p_end.Y, host.z))
 
     refs = ReferenceArray()
     for _, ref in hits:
         refs.Append(ref)
-
     if dim_type is not None:
         dim = doc.Create.NewDimension(view, dim_line, refs, dim_type)
     else:
         dim = doc.Create.NewDimension(view, dim_line, refs)
     doc.Regenerate()
 
-    # Room names under the value of each segment.
+    # Room names under the value of each segment. With only two
+    # references the dimension itself is the one segment.
     labelled = 0
-    if dim.NumberOfSegments == 0:
-        # Only two references: the dimension itself is the one segment.
-        label = room_label(find_room(dim.Origin, room_z, phase),
-                           include_number)
-        if label:
-            dim.Below = label
+    segments = [dim] if dim.NumberOfSegments == 0 else list(dim.Segments)
+    for seg in segments:
+        name = room_label(
+            find_room(room_probe(seg.Origin, axis, members), room_z, phase),
+            include_number)
+        if name:
+            seg.Below = name
             labelled += 1
-    else:
-        for seg in dim.Segments:
-            label = room_label(find_room(seg.Origin, room_z, phase),
-                               include_number)
-            if label:
-                seg.Below = label
-                labelled += 1
 
     parts = ["%d on Structure layer" % stats["structure"]]
     if include_others:
@@ -610,10 +731,14 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
         parts.append("%d on finish faces" % stats["finish"])
     else:
         parts.append("%d skipped" % stats["skipped"])
-    msg = ("Line %s: %d faces dimensioned (walls: %s), %d room label(s)."
-           % (line_elem.Id, len(hits), ", ".join(parts), labelled))
-    if notes:
-        msg += " " + "; ".join(notes) + "."
+    msg = ("%s %s: %d faces dimensioned (walls: %s), %d room label(s)."
+           % (label, ids, len(hits), ", ".join(parts), labelled))
+    unique_notes = []
+    for note in notes:
+        if note not in unique_notes:
+            unique_notes.append(note)
+    if unique_notes:
+        msg += " " + "; ".join(unique_notes) + "."
     return dim, msg
 
 
@@ -647,29 +772,44 @@ def main():
     phase = get_view_phase(view)
     room_z = get_level_z(view) + ROOM_PROBE_HEIGHT
 
+    lines = []
+    for element in elements:
+        try:
+            lines.append(DrawnLine(element, line_from_element(element)))
+        except Exception as ex:
+            report.append("FAILED: %s" % ex)
+
     dims = []
     TransactionManager.Instance.EnsureInTransaction(doc)
     try:
-        for element in elements:
-            # One sub-transaction per line: a failed line leaves nothing
+        for chain in connected_chains(lines):
+            # One sub-transaction per chain: a failed chain leaves nothing
             # behind, the others still go through.
             st = SubTransaction(doc)
             st.Start()
             try:
-                dim, msg = dimension_along_line(
-                    view, element, dim_type, include_number, phase, room_z,
-                    include_others)
-                if delete_line:
-                    doc.Delete(element.Id)
+                made = []
+                for axis, members in direction_groups(chain):
+                    dim, msg = dimension_group(
+                        view, axis, members, dim_type, include_number,
+                        phase, room_z, include_others)
+                    report.append(msg)
+                    if dim is not None:
+                        made.append(dim)
+                if made and delete_line:
+                    for line in chain:
+                        doc.Delete(line.element.Id)
                 st.Commit()
-                dims.append(dim)
-                report.append(msg)
+                dims.extend(made)
             except Exception as ex:
                 st.RollBack()
                 report.append("FAILED: %s" % ex)
     finally:
         TransactionManager.Instance.TransactionTaskDone()
 
+    if lines and not dims:
+        report.append("No dimensions made. Check the lines run "
+                      "perpendicular to the walls and fully through them.")
     return dims, "\n".join(report)
 
 

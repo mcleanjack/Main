@@ -37,12 +37,12 @@ and you don't have loose text notes to manage.
 
 | Step | What happens |
 |---|---|
-| Get the line | Uses the Detail/Model Line(s) wired into `IN[0]`. If nothing is wired, it asks you to click one on screen. |
+| Get the line | Uses the Detail/Model Line(s) wired into `IN[0]`. If nothing is wired, it asks you to click one or more on screen, then **Finish**. |
 | Find walls | Collects walls visible in the **active plan view**. A quick bounding-box check skips walls nowhere near the line. |
 | Find faces | For each wall, gets both side faces (`HostObjectUtils.GetSideFaces`, Exterior + Interior) and intersects them with the line. It tries the view's cut-plane height first, then heights spread up the full face. That way a line drawn **through a window or door** still finds the host wall above the head or below the sill. `Face.Project` rejects hits that fall outside the face's real edges or inside an opening. |
 | Pick the Structure layer | Reads the wall type's layers and works out where the **Structure [1]** layer's two faces are. It then snaps to them (see section 2). Walls with no Structure layer are **skipped** unless `IN[4] = True`. |
 | Filter | Only faces **square to the line** (within 1°) are kept, because a linear dimension can only measure between faces perpendicular to it. Faces closer than about 1 mm (e.g. flush joined walls) are merged. |
-| Dimension | `NewDimension(view, line, references)` creates one string along the exact line you drew. |
+| Dimension | `NewDimension(view, line, references)` creates one string along the line you drew. For a stepped path of connected lines, it's one string per direction, on the longest run (see *Stepped lines* in section 4). |
 | Room names | For each segment, finds the room at the segment midpoint (1 ft above the view's level, in the **view's phase**) and sets `segment.Below = room name`. |
 
 Everything runs in a single transaction, so one **Ctrl+Z** in Revit undoes it.
@@ -123,7 +123,8 @@ The report names each skipped wall and why, e.g.
    on-screen pick doesn't work well in Automatic mode.
 4. Save it as `AutoDimension.dyn`.
 
-When it runs, Revit asks you to click the line.
+When it runs, Revit asks you to click the line(s). Click as many as you
+like, then click **Finish** on the Options Bar (or press Enter).
 
 > **Running it more than once:** Dynamo only re-runs a node when one of
 > its inputs has changed. With nothing wired in, a second click of
@@ -143,7 +144,7 @@ Add input ports to the Python node with the **+** button until it has six
 
 | Port | Node | Purpose |
 |---|---|---|
-| `IN[0]` | **Select Model Elements** (or *Select Model Element*) | The line(s) you drew. Selecting several lines gives one dimension string per line. Leave it unwired to pick on screen instead. |
+| `IN[0]` | **Select Model Elements** (or *Select Model Element*) | The line(s) you drew. Connected lines make one string per direction; separate lines make one string each (see *Stepped lines* below). Leave it unwired to pick on screen instead. |
 | `IN[1]` | **String** | Dimension type name, e.g. `Linear - 2.5mm Arial`. Leave blank for the default. |
 | `IN[2]` | **Boolean** | `True` = "101 Kitchen", `False` = "Kitchen". |
 | `IN[3]` | **Boolean** | `True` deletes the sketch line after dimensioning. |
@@ -160,7 +161,7 @@ dimensions and `OUT[1]` is a text report.
 
 **Dynamo Player:** to make the inputs editable in Player, right-click each
 input node and choose **Is Input**. With `IN[0]` unwired, Player runs become
-"click Run → click the line → done".
+"click Run → click the line(s) → Finish → done".
 
 ---
 
@@ -172,13 +173,35 @@ input node and choose **Is Input**. With `IN[0]` unwired, Player runs become
    building, **perpendicular to the walls** you want to measure. Put it
    where you want the dimension string to sit. Make sure it starts and ends
    **outside** the first and last walls.
-3. Run the graph and pick the line if prompted.
+3. Run the graph. If prompted, click the line(s), then click **Finish**
+   on the Options Bar (or press Enter).
 4. Check the Watch node, for example:
    `Line 452113: 12 faces dimensioned (walls: 6 on Structure layer, 0 skipped), 5 room label(s).`
 
+### Stepped lines (one string through several runs)
+
+To get around something, like the porch and garage below, draw the path
+as several **connected** lines with their ends touching (snap them
+end-to-end), then select them all:
+
+```
+                  ┌───────────────────────────────  run 2 (longest)
+                  │ jog
+ ─────────────────┘  run 1
+```
+
+- All runs going the **same direction** are merged into **one**
+  continuous string. It picks up every wall that any run crosses and
+  sits on the longest run.
+- Each room name is taken from whichever run passes through that stretch,
+  so run 1's rooms are labelled from run 1.
+- The **jog** crosses no walls, so it's ignored. The report shows it as
+  `0 wall face(s) found, no dimension made`. If a jog does cross walls,
+  it gets its own short string.
+- Lines that **don't touch** each other always get separate strings. So
+  a horizontal and a vertical line drawn apart give two dimensions.
+
 Tips:
-- For horizontal and vertical strings, draw two lines and select both. Each
-  gets its own dimension.
 - To make the room text bigger or smaller, change the dimension type's text
   settings. Below-text uses the same text style as the value.
 - To tweak a label by hand, double-click the dimension value. The **Below**
@@ -196,7 +219,7 @@ Tips:
 | Opening that runs the full wall height | No wall at that point, so nothing to dimension there. |
 | Curtain walls | Skipped and listed in the report. They have no side faces. |
 | Walls/rooms in **linked models** | Not included. The tool only reads the host model. |
-| Fewer than 2 faces hit | That line is reported as `FAILED` and no dimension is made. |
+| Fewer than 2 faces hit | No dimension is made for that line/run, and the report says so. That's normal for a jog between runs. |
 | Line not straight / not a line | `FAILED` with a message saying why. |
 | Room not placed or unbounded | That segment has no label. |
 | Wall with no Structure layer | Skipped and named in the report, or dimensioned to its core/finished faces if `IN[4] = True`. |
@@ -222,7 +245,10 @@ Tips:
 4. On a wall type whose core boundary is drawn around the plasterboard as
    well, check it is skipped and the report says the Structure layer
    isn't between the Core Boundary rows.
-5. The same, with two lines selected (one horizontal, one vertical).
+5. A stepped path (two horizontal runs joined by a short vertical jog).
+   You should get **one** string with every wall either run crosses, and
+   room names from the run that passes through each room. Also try two
+   separate lines (one horizontal, one vertical): you get two strings.
 6. A line through a window and an internal door. Both host walls should
    read their framing size, e.g. 90.
 7. A line that ends inside a room. Walls beyond its end should be ignored.
