@@ -467,6 +467,13 @@ def wall_side_hits(wall, side, a, b, direction, zs_base, sample_face=True):
                              zs_base + (face_z_samples(face)
                                         if sample_face else []))
         if hit is not None:
+            # Revit often splits one side of a wall into several flat faces
+            # stacked up its height (e.g. where a floor or ceiling joins
+            # it). They sit in the same plane, so the line hits them at the
+            # same point: keep one, or the wall looks like it's crossed
+            # more than once.
+            if any(abs(hit[0] - t) < DEDUP_TOL for t, _, _ in hits):
+                continue
             hits.append((hit[0], hit[1], ref))
     return hits
 
@@ -576,13 +583,16 @@ def ref_at_offset(wall, view, dim_line, ref_ext, ref_int, offset, total):
         return ref_ext
     if total - offset < DEDUP_TOL:
         return ref_int
-    for index in CORE_INDEX_CANDIDATES:
-        ref = core_reference(wall, index)
-        if ref is None:
-            continue
-        v = measure(view, dim_line, ref_ext, ref)
-        if v is not None and abs(v - offset) < CORE_CHECK_TOL:
-            return ref
+    # Check each candidate by measuring from the exterior finish face, and
+    # failing that from the interior finish face.
+    for anchor, expected in ((ref_ext, offset), (ref_int, total - offset)):
+        for index in CORE_INDEX_CANDIDATES:
+            ref = core_reference(wall, index)
+            if ref is None:
+                continue
+            v = measure(view, dim_line, anchor, ref)
+            if v is not None and abs(v - expected) < CORE_CHECK_TOL:
+                return ref
     return None
 
 
@@ -673,7 +683,8 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
             why = ("Structure layer isn't between the Core Boundary rows "
                    "in its wall type")
         elif layers is not None and not clean:
-            why = "line doesn't cross it cleanly"
+            why = ("line doesn't cross it cleanly: %d exterior / %d "
+                   "interior face(s) hit" % (len(ext), len(inn)))
         elif layers is None:
             why = "no layer structure"
         else:
