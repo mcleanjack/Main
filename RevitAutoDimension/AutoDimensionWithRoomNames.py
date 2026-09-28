@@ -49,6 +49,11 @@
 #   IN[4]  Include walls with no Structure layer (bool). Default False =
 #          skip them. True = dimension them to their core faces, or their
 #          finished faces if they have no core.
+#   IN[5]  Refresh (anything, e.g. a Boolean). Not read by the script. It
+#          is there so you can force a re-run: Dynamo only re-runs a node
+#          when one of its inputs changes, so a second click of Run with
+#          nothing changed does nothing. Flip this Boolean before each
+#          run, or run the graph from Dynamo Player instead.
 #
 # Output (OUT):
 #   [0] list of created Dimension elements
@@ -235,6 +240,14 @@ def pick_lines():
 
 def line_from_element(element):
     """Return the element's bound Line, or raise ValueError."""
+    try:
+        valid = element is not None and element.IsValidObject
+    except Exception:
+        valid = False
+    if not valid:
+        raise ValueError("The selected line no longer exists (deleted, or "
+                         "undone). Select the line again, or unwire IN[0] "
+                         "to pick it on screen.")
     if not isinstance(element, CurveElement):
         raise ValueError("'%s' is not a Detail/Model Line."
                          % safe_name(element, str(element)))
