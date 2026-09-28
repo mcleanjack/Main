@@ -83,7 +83,7 @@ from Autodesk.Revit.DB import (
     UV, Reference, ReferenceArray, SubTransaction, HostObjectUtils,
     ShellLayerType, PlanarFace, MaterialFunctionAssignment, WallFunction,
     ViewPlan, PlanViewPlane, DimensionType, DimensionStyleType,
-    BuiltInParameter
+    BuiltInParameter, BuiltInCategory, RevitLinkInstance
 )
 from Autodesk.Revit.UI.Selection import ObjectType
 from Autodesk.Revit.Exceptions import OperationCanceledException
@@ -222,13 +222,88 @@ def room_label(room, include_number):
     return name or ""
 
 
-def find_room(point_xy, room_z, phase):
-    probe = XYZ(point_xy.X, point_xy.Y, room_z)
-    try:
-        if phase is not None:
-            return doc.GetRoomAtPoint(probe, phase)
-        return doc.GetRoomAtPoint(probe)
-    except Exception:
+class RoomFinder(object):
+    """Finds the room at a plan point on the view's level, in this model
+    or in any loaded linked model (rooms are often in a linked
+    architectural model even when their tags show in this one).
+
+    Rooms in the view's phase are preferred, but rooms in other phases are
+    still used if nothing else is there, so a phase mismatch doesn't mean
+    no labels at all."""
+
+    def __init__(self, view, room_z, phase):
+        self.room_z = room_z
+        self.level_z = room_z - ROOM_PROBE_HEIGHT
+        self.phase_name = safe_name(phase) if phase is not None else ""
+        self.host = self._placed_rooms(doc)
+        self.links = []
+        for inst in FilteredElementCollector(doc).OfClass(RevitLinkInstance):
+            try:
+                link_doc = inst.GetLinkDocument()
+                if link_doc is None:
+                    continue    # link not loaded
+                rooms = self._placed_rooms(link_doc)
+                if rooms:
+                    inverse = inst.GetTotalTransform().Inverse
+                    self.links.append((inverse, rooms))
+            except Exception:
+                continue
+
+    def _placed_rooms(self, source_doc):
+        """[(room, bounding box, phase name)] for placed, enclosed rooms."""
+        out = []
+        rooms = (FilteredElementCollector(source_doc)
+                 .OfCategory(BuiltInCategory.OST_Rooms)
+                 .WhereElementIsNotElementType())
+        for room in rooms:
+            try:
+                if room.Area <= 0:
+                    continue    # not placed, or not enclosed
+                bb = room.get_BoundingBox(None)
+                if bb is None:
+                    continue
+                phase_name = ""
+                p = room.get_Parameter(BuiltInParameter.ROOM_PHASE)
+                if p is not None:
+                    phase_name = safe_name(source_doc.GetElement(
+                        p.AsElementId()))
+                out.append((room, bb, phase_name))
+            except Exception:
+                continue
+        return out
+
+    def counts(self):
+        return len(self.host), sum(len(r) for _, r in self.links)
+
+    def _search(self, rooms, x, y, level_z, probe_z):
+        candidates = [(room, bb) for room, bb, phase_name in
+                      sorted(rooms, key=lambda r: r[2] != self.phase_name)
+                      if bb.Min.X - 0.01 <= x <= bb.Max.X + 0.01
+                      and bb.Min.Y - 0.01 <= y <= bb.Max.Y + 0.01
+                      # room sits on this level (base within 3 ft of it)
+                      and abs(bb.Min.Z - level_z) < 3.0]
+        for room, bb in candidates:
+            # Probe at the usual height, or halfway up a very low room.
+            z = min(probe_z, (bb.Min.Z + bb.Max.Z) / 2.0)
+            z = max(z, bb.Min.Z + 0.01)
+            try:
+                if room.IsPointInRoom(XYZ(x, y, z)):
+                    return room
+            except Exception:
+                continue
+        return None
+
+    def find(self, point):
+        room = self._search(self.host, point.X, point.Y,
+                            self.level_z, self.room_z)
+        if room is not None:
+            return room
+        for inverse, rooms in self.links:
+            p = inverse.OfPoint(XYZ(point.X, point.Y, self.room_z))
+            base = inverse.OfPoint(XYZ(point.X, point.Y, self.level_z))
+            room = self._search(rooms, p.X, p.Y, base.Z, p.Z)
+            if room is not None:
+                return room
         return None
 
 
@@ -718,8 +793,34 @@ def room_probe(point, axis, members):
     return p
 
 
-def dimension_group(view, axis, members, dim_type, include_number, phase,
-                    room_z, include_others):
+def segment_midpoints(segments, hits, axis, members):
+    """Plan point at the middle of each dimension segment, worked out from
+    the wall faces we dimensioned (sorted along the axis), not from
+    Revit's Segment.Origin. Falls back to Origin if Revit merged or
+    dropped a reference and the counts no longer line up."""
+    first = members[0]
+
+    def at(s):
+        return first.a.Add(axis.Multiply(s - first.s_a))
+
+    if len(segments) == len(hits) - 1:
+        mids = [at((hits[i][0] + hits[i + 1][0]) / 2.0)
+                for i in range(len(segments))]
+        # Revit lists segments along the dimension line; flip if it runs
+        # the other way to ours.
+        try:
+            o0 = flat(segments[0].Origin).Subtract(first.a).DotProduct(axis)
+            o1 = flat(segments[-1].Origin).Subtract(first.a).DotProduct(axis)
+            if len(segments) > 1 and o0 > o1 + DEDUP_TOL:
+                mids.reverse()
+        except Exception:
+            pass
+        return mids
+    return [seg.Origin for seg in segments]
+
+
+def dimension_group(view, axis, members, dim_type, include_number, rooms,
+                    include_others):
     """One dimension string for a group of parallel, connected lines.
     Returns (Dimension or None, message)."""
     notes = []
@@ -755,13 +856,19 @@ def dimension_group(view, axis, members, dim_type, include_number, phase,
     # references the dimension itself is the one segment.
     labelled = 0
     segments = [dim] if dim.NumberOfSegments == 0 else list(dim.Segments)
-    for seg in segments:
-        name = room_label(
-            find_room(room_probe(seg.Origin, axis, members), room_z, phase),
-            include_number)
+    for seg, mid in zip(segments, segment_midpoints(segments, hits, axis,
+                                                    members)):
+        name = room_label(rooms.find(room_probe(mid, axis, members)),
+                          include_number)
         if name:
             seg.Below = name
             labelled += 1
+    if labelled == 0:
+        host_rooms, link_rooms = rooms.counts()
+        notes.append("No room found under any segment (placed rooms: %d in "
+                     "this model, %d in linked models). Check the rooms are "
+                     "placed and enclosed on this level, and the line runs "
+                     "through them" % (host_rooms, link_rooms))
 
     parts = ["%d on Structure layer" % stats["structure"],
              "%d external with outer face" % stats["outer"]]
@@ -811,8 +918,8 @@ def main():
     include_number = bool(_in(2, False))
     delete_line = bool(_in(3, False))
     include_others = bool(_in(4, False))
-    phase = get_view_phase(view)
-    room_z = get_level_z(view) + ROOM_PROBE_HEIGHT
+    rooms = RoomFinder(view, get_level_z(view) + ROOM_PROBE_HEIGHT,
+                       get_view_phase(view))
 
     lines = []
     for element in elements:
@@ -834,7 +941,7 @@ def main():
                 for axis, members in direction_groups(chain):
                     dim, msg = dimension_group(
                         view, axis, members, dim_type, include_number,
-                        phase, room_z, include_others)
+                        rooms, include_others)
                     report.append(msg)
                     if dim is not None:
                         made.append(dim)

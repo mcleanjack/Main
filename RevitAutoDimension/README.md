@@ -43,7 +43,7 @@ and you don't have loose text notes to manage.
 | Pick the Structure layer | Reads the wall type's layers and works out where the **Structure [1]** layer's two faces are. It then snaps to them (see section 2). Walls with no Structure layer are **skipped** unless `IN[4] = True`. |
 | Filter | Only faces **square to the line** (within 1°) are kept, because a linear dimension can only measure between faces perpendicular to it. Faces closer than about 1 mm (e.g. flush joined walls) are merged. |
 | Dimension | `NewDimension(view, line, references)` creates one string along the line you drew. For a stepped path of connected lines, it's one string per direction, on the longest run (see *Stepped lines* in section 4). |
-| Room names | For each segment, finds the room at the segment midpoint (1 ft above the view's level, in the **view's phase**) and sets `segment.Below = room name`. |
+| Room names | For each segment, finds the room at the segment's midpoint on your drawn line, on the view's level. It looks in **this model and any loaded linked models**, preferring rooms in the **view's phase**. It then sets `segment.Below = room name`. If no segment finds a room, the report says how many placed rooms it could see, to help track down why. |
 
 Everything runs in a single transaction, so one **Ctrl+Z** in Revit undoes it.
 
@@ -264,6 +264,8 @@ Tips:
 | Fewer than 2 faces hit | No dimension is made for that line/run, and the report says so. That's normal for a jog between runs. |
 | Line not straight / not a line | `FAILED` with a message saying why. |
 | Room not placed or unbounded | That segment has no label. |
+| Rooms in a linked model | Found, as long as the link is loaded. |
+| No room labels at all | The report says `No room found under any segment (placed rooms: N in this model, M in linked models)`. If both are 0, the rooms aren't placed/enclosed or the link isn't loaded. |
 | Wall with no Structure layer | External (Function = Exterior): its outer face only. Otherwise skipped and named in the report, or dimensioned to its core/finished faces if `IN[4] = True`. |
 | Structure layer not bounded by the core | Skipped and named in the report. Fix the wall type's Core Boundary rows (see section 2). |
 | Rooms on a different phase | Labels come from the view's phase, so a demolition-phase view shows existing rooms. |
