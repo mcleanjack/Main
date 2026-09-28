@@ -10,15 +10,23 @@
 #   1. Takes one or more straight Detail Lines / Model Lines that you have
 #      drawn across the building in a plan view (wired in, or picked on
 #      screen when the graph runs).
-#   2. Finds every wall face in the active plan view that the line crosses:
-#      both side faces (exterior and interior) of every wall, so you get
-#      each wall's thickness and each room's clear width.
+#   2. Finds every wall the line crosses in the active plan view and, by
+#      default, dimensions to the two faces of each wall's CORE (e.g. the
+#      90mm stud framing, not the 10mm plasterboard either side). Set
+#      IN[4] to False to dimension to the finished faces instead.
 #   3. Creates ONE continuous linear dimension string along the drawn line
 #      through all of those faces.
 #   4. For each segment of the string, looks up the Room at the segment's
 #      midpoint and writes the room name into that segment's "Below" text,
 #      so the room name sits underneath the numeric value. Segments that
-#      span a wall's thickness have no room, so they stay blank.
+#      span a wall's core have no room, so they stay blank.
+#
+# How core faces are found: the Revit API has no documented call for them,
+# so this uses the community-established reference "<UniqueId>:-9999:<n>".
+# Each candidate is checked by measuring it against the wall type's finish
+# layer thicknesses before it is used. If a wall's core can't be verified
+# (no core defined, stacked wall, a wall split by the line, etc.) that wall
+# falls back to its finished faces and the report says so.
 #
 # All changes happen in one Dynamo transaction: a single Ctrl+Z in Revit
 # undoes the whole run.
@@ -32,6 +40,8 @@
 #   IN[2]  Include room number (bool). True gives "101 Kitchen". Default
 #          False = name only.
 #   IN[3]  Delete the drawn line afterwards (bool). Default False.
+#   IN[4]  Core faces only (bool). Default True = dimension to the core
+#          boundary of each wall. False = finished (outer) faces.
 #
 # Output (OUT):
 #   [0] list of created Dimension elements
@@ -48,7 +58,8 @@ clr.AddReference('RevitServices')
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, Wall, WallKind, CurveElement, Line, XYZ,
-    UV, ReferenceArray, HostObjectUtils, ShellLayerType, PlanarFace,
+    UV, Reference, ReferenceArray, SubTransaction, HostObjectUtils,
+    ShellLayerType, PlanarFace,
     ViewPlan, PlanViewPlane, DimensionType, DimensionStyleType,
     BuiltInParameter
 )
@@ -71,6 +82,11 @@ DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
 PARALLEL_COS = math.cos(math.radians(1.0))   # face must be within 1 deg of
                                              # perpendicular to the line
 ROOM_PROBE_HEIGHT = 1.0      # probe rooms 1 ft above the view's level
+CORE_CHECK_TOL = 0.002       # ~0.6 mm: core ref must measure within this
+# "<UniqueId>:-9999:<n>" indices tried for core faces (see core_reference).
+# Community findings: 1 = wall centre, 2/3 = the two core faces,
+# 4 = core centre. Each candidate is verified by measurement before use.
+CORE_INDEX_CANDIDATES = [2, 3]
 
 
 # ----------------------------------------------------------------------------
@@ -253,8 +269,9 @@ def face_mid_z(face):
 
 def intersect_face(face, a, b, direction, z_candidates):
     """Intersect the drawn segment a->b (flattened, then lifted to each
-    candidate Z) with a planar wall face. Returns the distance along the
-    line from a, or None if the line misses the face.
+    candidate Z) with a planar wall face. Returns (distance along the
+    line from a, |cos| of the angle between line and face normal), or None
+    if the line misses the face.
 
     Also returns None if the face isn't square to the line: a linear
     dimension can only measure between faces perpendicular to it."""
@@ -270,6 +287,7 @@ def intersect_face(face, a, b, direction, z_candidates):
     origin = face.Origin
     length = a.DistanceTo(b)
     denom = n.DotProduct(direction)
+    cos_angle = abs(denom)
     for z in z_candidates:
         if z is None:
             continue
@@ -285,41 +303,162 @@ def intersect_face(face, a, b, direction, z_candidates):
         except Exception:
             res = None
         if res is not None and res.Distance < 0.01:
-            return t
+            return t, cos_angle
     return None
 
 
-def collect_face_hits(view, a, b, direction, skipped):
-    """Return a list of (distance_along_line, Reference) for every wall
-    side face crossed by the line."""
+def finish_thicknesses(wall):
+    """(exterior finish, interior finish) thickness either side of the
+    wall's core, from its compound structure. None if the wall type has
+    no layered structure or no core."""
+    try:
+        cs = wall.WallType.GetCompoundStructure()
+    except Exception:
+        return None
+    if cs is None:
+        return None
+    first = cs.GetFirstCoreLayerIndex()
+    last = cs.GetLastCoreLayerIndex()
+    if first < 0 or last < first:
+        return None
+    widths = [layer.Width for layer in cs.GetLayers()]
+    # Layer 0 is on the exterior side, matching ShellLayerType.Exterior.
+    return sum(widths[:first]), sum(widths[last + 1:])
+
+
+def core_reference(wall, index):
+    """Build a reference to one of the wall's internal planes.
+
+    The Revit API has no documented call for core faces. The widely used
+    workaround is the stable representation "<UniqueId>:-9999:<n>", where
+    n selects the wall centre / core faces / core centre. Which n is which
+    is undocumented, so callers must verify the result (see resolve_core)."""
+    try:
+        return Reference.ParseFromStableRepresentation(
+            doc, "%s:-9999:%d" % (wall.UniqueId, index))
+    except Exception:
+        return None
+
+
+def measure(view, dim_line, ref_a, ref_b):
+    """Length of a throwaway dimension between two references, or None.
+    Runs in a SubTransaction that is always rolled back."""
+    st = SubTransaction(doc)
+    st.Start()
+    try:
+        ra = ReferenceArray()
+        ra.Append(ref_a)
+        ra.Append(ref_b)
+        d = doc.Create.NewDimension(view, dim_line, ra)
+        doc.Regenerate()
+        v = d.Value
+        return float(v) if v is not None else None
+    except Exception:
+        return None
+    finally:
+        st.RollBack()
+
+
+def resolve_core(wall, view, dim_line, finish_ref, finish_thk, candidates):
+    """Return the core-face reference that sits finish_thk in from the
+    finish face finish_ref, trying each candidate index. None if none of
+    them measures right."""
+    for index in candidates:
+        ref = core_reference(wall, index)
+        if ref is None:
+            continue
+        v = measure(view, dim_line, finish_ref, ref)
+        if v is not None and abs(v - finish_thk) < CORE_CHECK_TOL:
+            return ref
+    return None
+
+
+def wall_side_hits(wall, side, a, b, direction, zs_base):
+    """[(t, cos_angle, Reference)] for this wall's side faces on one side
+    that the line crosses."""
+    hits = []
+    try:
+        refs = HostObjectUtils.GetSideFaces(wall, side)
+    except Exception:
+        return hits
+    for ref in refs:
+        try:
+            face = wall.GetGeometryObjectFromReference(ref)
+        except Exception:
+            continue
+        if face is None:
+            continue
+        hit = intersect_face(face, a, b, direction,
+                             zs_base + [face_mid_z(face)])
+        if hit is not None:
+            hits.append((hit[0], hit[1], ref))
+    return hits
+
+
+def core_hits(wall, view, dim_line, ext, inn):
+    """Swap one wall's finish-face hits for its core-face hits.
+    ext / inn are (t, cos_angle, ref) of the exterior / interior finish
+    faces. Returns [(t, ref), (t, ref)] or None if the core can't be
+    resolved."""
+    thk = finish_thicknesses(wall)
+    if thk is None:
+        return None
+    ext_thk, int_thk = thk
+    t_ext, cos_ext, ref_ext = ext
+    t_int, cos_int, ref_int = inn
+    step = 1.0 if t_int > t_ext else -1.0
+
+    # A side with no finish layers: its finish face IS the core face.
+    if ext_thk < DEDUP_TOL:
+        core_ext = ref_ext
+    else:
+        core_ext = resolve_core(wall, view, dim_line, ref_ext, ext_thk,
+                                CORE_INDEX_CANDIDATES)
+    if int_thk < DEDUP_TOL:
+        core_int = ref_int
+    else:
+        core_int = resolve_core(wall, view, dim_line, ref_int, int_thk,
+                                list(reversed(CORE_INDEX_CANDIDATES)))
+    if core_ext is None or core_int is None:
+        return None
+    return [(t_ext + step * ext_thk / cos_ext, core_ext),
+            (t_int - step * int_thk / cos_int, core_int)]
+
+
+def collect_face_hits(view, a, b, direction, dim_line, core_only, notes):
+    """Return a sorted, de-duplicated list of (distance_along_line,
+    Reference) for every wall face to dimension along the line."""
     cut_z = get_cut_plane_z(view)
     level_z = get_level_z(view)
+    zs_base = [cut_z, level_z + ROOM_PROBE_HEIGHT]
     hits = []
     for wall in collect_walls(view):
         if not wall_bbox_hits_line(wall, view, a, b):
             continue
         try:
             if wall.WallType.Kind == WallKind.Curtain:
-                skipped.append("Curtain wall %s skipped" % wall.Id)
+                notes.append("Curtain wall %s skipped" % wall.Id)
                 continue
         except Exception:
             pass
-        for side in (ShellLayerType.Exterior, ShellLayerType.Interior):
-            try:
-                refs = HostObjectUtils.GetSideFaces(wall, side)
-            except Exception:
+        ext = wall_side_hits(wall, ShellLayerType.Exterior, a, b,
+                             direction, zs_base)
+        inn = wall_side_hits(wall, ShellLayerType.Interior, a, b,
+                             direction, zs_base)
+        if not ext and not inn:
+            continue
+
+        if core_only:
+            core = None
+            if len(ext) == 1 and len(inn) == 1:
+                core = core_hits(wall, view, dim_line, ext[0], inn[0])
+            if core is not None:
+                hits.extend(core)
                 continue
-            for ref in refs:
-                try:
-                    face = wall.GetGeometryObjectFromReference(ref)
-                except Exception:
-                    continue
-                if face is None:
-                    continue
-                zs = [cut_z, level_z + ROOM_PROBE_HEIGHT, face_mid_z(face)]
-                t = intersect_face(face, a, b, direction, zs)
-                if t is not None:
-                    hits.append((t, ref))
+            notes.append("Wall %s: core faces not found, used finish faces"
+                         % wall.Id)
+        hits.extend((t, ref) for t, _, ref in ext + inn)
+
     hits.sort(key=lambda h: h[0])
 
     # Drop coincident faces (e.g. flush faces of two joined walls);
@@ -337,14 +476,18 @@ def collect_face_hits(view, a, b, direction, skipped):
 # ----------------------------------------------------------------------------
 
 def dimension_along_line(view, line_elem, dim_type, include_number,
-                         phase, room_z):
+                         phase, room_z, core_only):
     curve = line_from_element(line_elem)
     a = flat(curve.GetEndPoint(0))
     b = flat(curve.GetEndPoint(1))
     direction = b.Subtract(a).Normalize()
 
-    skipped = []
-    hits = collect_face_hits(view, a, b, direction, skipped)
+    # Dimension line sits exactly where the user drew it.
+    dim_line = Line.CreateBound(curve.GetEndPoint(0), curve.GetEndPoint(1))
+
+    notes = []
+    hits = collect_face_hits(view, a, b, direction, dim_line, core_only,
+                             notes)
     if len(hits) < 2:
         raise ValueError(
             "Line %s crosses %d wall face(s) square to it; need at least 2. "
@@ -355,8 +498,6 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
     for _, ref in hits:
         refs.Append(ref)
 
-    # Dimension line sits exactly where the user drew it.
-    dim_line = Line.CreateBound(curve.GetEndPoint(0), curve.GetEndPoint(1))
     if dim_type is not None:
         dim = doc.Create.NewDimension(view, dim_line, refs, dim_type)
     else:
@@ -380,10 +521,11 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
                 seg.Below = label
                 labelled += 1
 
-    msg = ("Line %s: %d wall faces dimensioned, %d room label(s)."
-           % (line_elem.Id, len(hits), labelled))
-    if skipped:
-        msg += " " + "; ".join(skipped) + "."
+    msg = ("Line %s: %d %s faces dimensioned, %d room label(s)."
+           % (line_elem.Id, len(hits), "core" if core_only else "wall",
+              labelled))
+    if notes:
+        msg += " " + "; ".join(notes) + "."
     return dim, msg
 
 
@@ -413,6 +555,7 @@ def main():
 
     include_number = bool(_in(2, False))
     delete_line = bool(_in(3, False))
+    core_only = bool(_in(4, True))
     phase = get_view_phase(view)
     room_z = get_level_z(view) + ROOM_PROBE_HEIGHT
 
@@ -422,7 +565,8 @@ def main():
         for element in elements:
             try:
                 dim, msg = dimension_along_line(
-                    view, element, dim_type, include_number, phase, room_z)
+                    view, element, dim_type, include_number, phase, room_z,
+                    core_only)
                 dims.append(dim)
                 report.append(msg)
                 if delete_line:
