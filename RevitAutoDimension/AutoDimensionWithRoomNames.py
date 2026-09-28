@@ -10,7 +10,9 @@
 #   1. Takes one or more straight Detail Lines / Model Lines that you have
 #      drawn across the building in a plan view (wired in, or picked on
 #      screen when the graph runs).
-#   2. Finds every wall the line crosses in the active plan view and
+#   2. Finds every wall the line crosses in the active plan view,
+#      including where it passes through a hosted window or door (the
+#      wall above the head / below the sill is used), and
 #      dimensions ONLY to the faces of its Structure [1] layer(s), as set
 #      in the wall type (Edit Type > Structure > Edit, Function column),
 #      e.g. the 90mm timber frame, not the plasterboard either side.
@@ -87,6 +89,7 @@ DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
 PARALLEL_COS = math.cos(math.radians(1.0))   # face must be within 1 deg of
                                              # perpendicular to the line
 ROOM_PROBE_HEIGHT = 1.0      # probe rooms 1 ft above the view's level
+FACE_Z_SAMPLES = 24          # heights tried up each wall face (openings)
 CORE_CHECK_TOL = 0.002       # ~0.6 mm: core ref must measure within this
 # "<UniqueId>:-9999:<n>" indices tried for core faces (see core_reference).
 # Community findings: 1 = wall centre, 2/3 = the two core faces,
@@ -263,13 +266,18 @@ def wall_bbox_hits_line(wall, view, a, b):
                 or min(a.Y, b.Y) > bb.Max.Y + pad)
 
 
-def face_mid_z(face):
+def face_z_samples(face, count=FACE_Z_SAMPLES):
+    """Heights spread evenly up a wall face. A window or door leaves a
+    hole in the face, so probing only one height can miss the wall; one of
+    these heights will land on the wall below the sill or above the head."""
     try:
         bb = face.GetBoundingBox()
-        uv = UV((bb.Min.U + bb.Max.U) / 2.0, (bb.Min.V + bb.Max.V) / 2.0)
-        return face.Evaluate(uv).Z
+        zs = [face.Evaluate(UV(u, v)).Z
+              for u in (bb.Min.U, bb.Max.U) for v in (bb.Min.V, bb.Max.V)]
     except Exception:
-        return None
+        return []
+    z0, z1 = min(zs), max(zs)
+    return [z0 + (z1 - z0) * (i + 0.5) / count for i in range(count)]
 
 
 def intersect_face(face, a, b, direction, z_candidates):
@@ -328,7 +336,7 @@ def wall_side_hits(wall, side, a, b, direction, zs_base):
         if face is None:
             continue
         hit = intersect_face(face, a, b, direction,
-                             zs_base + [face_mid_z(face)])
+                             zs_base + face_z_samples(face))
         if hit is not None:
             hits.append((hit[0], hit[1], ref))
     return hits

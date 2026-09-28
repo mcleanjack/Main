@@ -39,7 +39,7 @@ and you don't have loose text notes to manage.
 |---|---|
 | Get the line | Uses the Detail/Model Line(s) wired into `IN[0]`. If nothing is wired, it asks you to click one on screen. |
 | Find walls | Collects walls visible in the **active plan view**. A quick bounding-box check skips walls nowhere near the line. |
-| Find faces | For each wall, gets both side faces (`HostObjectUtils.GetSideFaces`, Exterior + Interior) and intersects them with the line at the view's cut-plane height. `Face.Project` rejects hits that fall outside the face's real edges. |
+| Find faces | For each wall, gets both side faces (`HostObjectUtils.GetSideFaces`, Exterior + Interior) and intersects them with the line. It tries the view's cut-plane height first, then heights spread up the full face. That way a line drawn **through a window or door** still finds the host wall above the head or below the sill. `Face.Project` rejects hits that fall outside the face's real edges or inside an opening. |
 | Pick the Structure layer | Reads the wall type's layers and works out where the **Structure [1]** layer's two faces are. It then snaps to them (see section 2). Walls with no Structure layer are **skipped** unless `IN[4] = True`. |
 | Filter | Only faces **square to the line** (within 1°) are kept, because a linear dimension can only measure between faces perpendicular to it. Faces closer than about 1 mm (e.g. flush joined walls) are merged. |
 | Dimension | `NewDimension(view, line, references)` creates one string along the exact line you drew. |
@@ -175,6 +175,8 @@ Tips:
 |---|---|
 | Diagonal line through orthogonal walls | Those faces are skipped. Revit can't measure a linear dimension between faces that aren't square to the dimension line. |
 | Curved walls | Skipped, because a linear dimension can't reference a cylindrical face. |
+| Line through a window or door | Dimensioned to the **host wall**, using the wall above the head or below the sill. The window/door itself isn't dimensioned. |
+| Opening that runs the full wall height | No wall at that point, so nothing to dimension there. |
 | Curtain walls | Skipped and listed in the report. They have no side faces. |
 | Walls/rooms in **linked models** | Not included. The tool only reads the host model. |
 | Fewer than 2 faces hit | That line is reported as `FAILED` and no dimension is made. |
@@ -204,6 +206,8 @@ Tips:
    well, check it is skipped and the report says the Structure layer
    isn't between the Core Boundary rows.
 5. The same, with two lines selected (one horizontal, one vertical).
-6. A line that ends inside a room. Walls beyond its end should be ignored.
-7. A diagonal line. The report should show fewer faces, or `FAILED`.
-8. Run it, then press Ctrl+Z once. Everything created should be gone.
+6. A line through a window and an internal door. Both host walls should
+   read their framing size, e.g. 90.
+7. A line that ends inside a room. Walls beyond its end should be ignored.
+8. A diagonal line. The report should show fewer faces, or `FAILED`.
+9. Run it, then press Ctrl+Z once. Everything created should be gone.
