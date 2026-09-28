@@ -1152,9 +1152,11 @@ SELF_MARKER = "AUTO_DIMENSION_RERUN_MARKER"
 
 def flag_self_for_rerun():
     """Mark this Python node as modified so the next Run re-executes it.
-    Only in Manual run mode: in Automatic mode a modified node runs again
-    straight away, which would loop. Silently does nothing if Dynamo's
-    internals can't be reached (e.g. a different Dynamo version)."""
+    Dynamo clears that flag when it prepares a run, before executing, so
+    setting it here (during the run) lasts until the next click of Run.
+
+    Only in Manual run mode, so Automatic mode never re-prompts for lines
+    on its own. Returns None on success, else a short reason."""
     try:
         clr.AddReference('DynamoRevitDS')
         from Dynamo.Applications import DynamoRevit
@@ -1163,18 +1165,33 @@ def flag_self_for_rerun():
         except Exception:
             model = DynamoRevit().RevitDynamoModel
         workspace = model.CurrentWorkspace
-        if str(workspace.RunSettings.RunType) != "Manual":
-            return
+        run_type = workspace.RunSettings.RunType
+        # CPython3 hands .NET enums over as numbers (Manual = 0), IronPython
+        # as enum values, so compare against the enum itself.
+        try:
+            from Dynamo.Models import RunType
+            manual = run_type == RunType.Manual
+        except Exception:
+            manual = str(run_type) in ("Manual", "0")
+        if not manual:
+            return "Dynamo isn't in Manual run mode"
+        flagged = 0
         for node in workspace.Nodes:
             script = getattr(node, "Script", None)
             if script and SELF_MARKER in script:
                 node.MarkNodeAsModified(True)
-    except Exception:
-        pass
+                flagged += 1
+        return None if flagged else "couldn't find this Python node"
+    except Exception as ex:
+        return "couldn't reach Dynamo (%s)" % ex
 
 
 try:
     OUT = main()
 except Exception:
     OUT = [], "Unexpected error:\n" + traceback.format_exc()
-flag_self_for_rerun()
+_rerun_problem = flag_self_for_rerun()
+if _rerun_problem:
+    OUT = OUT[0], (OUT[1] + "\nNote: the next Run may not re-run this "
+                   "node automatically (%s). Use Dynamo Player instead, or "
+                   "re-wire an input to force a re-run." % _rerun_problem)
