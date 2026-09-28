@@ -16,10 +16,11 @@
 #      dimensions ONLY to the faces of its Structure [1] layer(s), as set
 #      in the wall type (Edit Type > Structure > Edit, Function column),
 #      e.g. the 90mm timber frame, not the plasterboard either side.
-#      EXTERNAL walls (wall type Function = Exterior) also get their outer
-#      face, e.g. the outside of the brick, so the string reads
-#      outside of brick > frame > rooms. A brick skin modelled as its own
-#      external wall (no Structure layer) gives just its outer face.
+#      EXTERNAL walls (wall type Function = Exterior) are dimensioned from
+#      their outer face (e.g. the outside of the brick) to the INNER face
+#      of the Structure layer, as one segment: brick 110 + cavity 40 +
+#      frame 90 = 240. A brick skin modelled as its own external wall (no
+#      Structure layer) gives just its outer face.
 #      Other walls with no Structure layer are skipped (IN[4] can include
 #      them).
 #   3. Creates ONE continuous linear dimension string through all of those
@@ -611,7 +612,8 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
     Reference) for every wall face to dimension along the line.
 
     Each wall is dimensioned to the faces of its Structure [1] layer(s).
-    External walls (type Function = Exterior) also get their outer face.
+    External walls (type Function = Exterior) get their outer face and the
+    inner face of the Structure layer instead.
     Other walls without a Structure layer are skipped, unless
     include_others is True, in which case they use their core faces, or
     failing that finished faces.
@@ -654,6 +656,11 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
             stats["outer"] += 1
 
         offsets = structure_offsets(layers) if clean else None
+        if offsets and outer is not None:
+            # External wall: outer face (added above) + only the INNER
+            # face of the Structure layer, e.g. outside of brick to inside
+            # of frame = 110 + 40 + 90 = 240 as one segment.
+            offsets = offsets[-1:]
         if offsets:
             res = offset_hits(wall, view, dim_line, ext[0], inn[0], layers,
                               offsets)

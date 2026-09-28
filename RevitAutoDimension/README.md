@@ -81,19 +81,34 @@ update if it moves or changes type.
 ### External walls: outer face
 
 For walls whose type has **Function = Exterior** (*Edit Type → Construction
-→ Function*), the string also picks up the wall's **outer face**, e.g. the
-outside of the brick. The outer face is the wall's exterior finished face,
-so the dimension stays attached to the wall.
+→ Function*), the string runs from the wall's **outer face** (e.g. the
+outside of the brick) to the **inner face of the Structure layer**, as one
+segment. For this wall type:
+
+| # | Function | Material | Thickness | Snapped to |
+|---|---|---|---|---|
+| 1 | Finish 2 [5] | Facebrick | 110 | ◀ outer face |
+| 2 | Thermal/Air Layer [3] | Air | 40 | |
+| 3 | Membrane Layer | Sarking | 0 | |
+| 4 | *Core Boundary* | | | |
+| 5 | Structure [1] | Timber Frame 90 | 90 | |
+| 6 | *Core Boundary* | | | ◀ inner face of frame |
+| 7 | Finish 1 [4] | Plaster | 10 | |
+
+the string reads **240** (110 + 40 + 90), then carries on into the room
+from the inside of the frame. Both points attach to the wall: the outer
+face is the wall's exterior face, and the inner frame face is its inner
+core boundary.
 
 | External wall modelled as... | String picks up |
 |---|---|
-| **One wall type**: brick + cavity + Structure frame + plasterboard | outside of brick → frame → frame, e.g. `160 │ 90` |
-| **Two walls**: a brick skin wall (no Structure layer) + a framed wall | outside of brick (from the brick wall) → frame → frame (from the framed wall) |
-| **A brick wall whose brick layer is Structure [1]** (e.g. a 150 mm brick wall type) | outside of brick → inside of brick |
+| **One wall type**: brick + cavity + Structure frame + plasterboard (above) | outside of brick → inside of frame, e.g. `240` |
+| **Two walls**: a brick skin wall (no Structure layer) + a framed wall | outside of brick (from the brick wall) → frame → frame (from the framed wall, set to Interior) |
+| **A brick wall whose brick layer is Structure [1]** (e.g. a 150 mm brick wall type) | outside of brick → inside of brick (its Structure layer) |
 
 Check these before you run it:
 - **Internal wall types must have Function = Interior.** Any wall type set
-  to *Exterior* gets the extra outer-face point. The report counts them
+  to *Exterior* is dimensioned outer face → inside of frame. The report counts them
   (`N external with outer face`), so a wrong type shows up quickly.
 - **External walls must face the right way.** The outer face is the
   wall's *exterior* side. If a wall was drawn inside-out, the string picks
