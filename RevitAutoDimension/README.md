@@ -45,8 +45,7 @@ and you don't have loose text notes to manage.
 | Dimension | `NewDimension(view, line, references)` creates one string along the exact line you drew. |
 | Room names | For each segment, finds the room at the segment midpoint (1 ft above the view's level, in the **view's phase**) and sets `segment.Below = room name`. |
 
-Everything runs in a single transaction, so one **Ctrl+Z** in Revit undoes it,
-including any anchor lines.
+Everything runs in a single transaction, so one **Ctrl+Z** in Revit undoes it.
 
 ---
 
@@ -59,26 +58,25 @@ and takes the layer(s) whose **Function** is **Structure [1]**:
 - One Structure layer (the usual case) gives its two faces.
 - Several Structure layers **next to each other** count as one block and
   give its outer two faces.
-- Separate Structure layers (e.g. a double stud wall with a gap) give two
-  faces each, so both frames are dimensioned.
+- Separate Structure layers (e.g. a double stud wall with a gap) can't
+  all sit on the two core boundaries, so those walls are skipped. Model
+  them as two walls instead, one per frame.
 
-### Attached vs anchored
+### Wall type setup (required)
 
 Revit only lets a dimension attach to a wall's **finished faces** or its
-**core faces**. It has no reference for faces between other layers. So:
+**core faces**. It has no reference for faces between other layers. So
+each face of the Structure layer must be one of those:
 
-| The Structure layer's faces are... | Dimension is attached via | Follows the wall if it moves? |
-|---|---|---|
-| the core boundaries: *Core Boundary* rows directly either side of the Structure layer, **as in the table above** | the core faces | **Yes** |
-| a finished face (e.g. unlined side of a wall) | the finished face | **Yes** |
-| anywhere else (e.g. core drawn around the plasterboard too, or the inner faces of a double stud wall) | a 100 mm **invisible detail line** placed exactly on that face | **No** |
+| The Structure layer's faces are... | Result |
+|---|---|
+| the core boundaries: *Core Boundary* rows directly either side of the Structure layer, **as in the table above** | Dimensioned, attached to the wall |
+| a finished face (e.g. the unlined side of a wall) | Dimensioned, attached to the wall |
+| anywhere else (e.g. core drawn around the plasterboard too) | **Skipped**, with the reason in the report |
 
-The invisible anchors keep the string correct right now, but they won't
-move with the wall. The report counts them, and each one has
-**Comments = `AutoDim anchor`** so you can find them later (e.g. a view
-filter on Lines where Comments equals that value). To avoid anchors, keep
-the *Core Boundary* rows directly either side of the Structure layer, as
-in the table above.
+So in each wall type, put the two *Core Boundary* rows **directly either
+side of the Structure layer**. The dimensions then attach to the wall and
+update if it moves or changes type.
 
 ### Core faces
 
@@ -106,6 +104,8 @@ The report names each skipped wall and why, e.g.
 - **no Structure layer**: no layer in the wall type has Function
   *Structure [1]*, e.g. a plasterboard lining wall. Set `IN[4] = True` to
   dimension these to their core (or finished) faces instead.
+- **Structure layer isn't between the Core Boundary rows in its wall
+  type**: fix the wall type as described above.
 - **no layer structure**: stacked walls, which have no single layer list.
 - **line doesn't cross it cleanly**: the line ends inside the wall or
   crosses a face more than once.
@@ -181,7 +181,7 @@ Tips:
 | Line not straight / not a line | `FAILED` with a message saying why. |
 | Room not placed or unbounded | That segment has no label. |
 | Wall with no Structure layer | Skipped and named in the report, or dimensioned to its core/finished faces if `IN[4] = True`. |
-| Structure layer not bounded by the core | Dimensioned via invisible anchor lines, which don't follow the wall (see section 2). |
+| Structure layer not bounded by the core | Skipped and named in the report. Fix the wall type's Core Boundary rows (see section 2). |
 | Rooms on a different phase | Labels come from the view's phase, so a demolition-phase view shows existing rooms. |
 
 ---
@@ -201,7 +201,8 @@ Tips:
    with no Structure layer. They should read 90 and 140. The lining wall
    should be skipped and named in the report.
 4. On a wall type whose core boundary is drawn around the plasterboard as
-   well, check it still reads 90. The report should mention anchor lines.
+   well, check it is skipped and the report says the Structure layer
+   isn't between the Core Boundary rows.
 5. The same, with two lines selected (one horizontal, one vertical).
 6. A line that ends inside a room. Walls beyond its end should be ignored.
 7. A diagonal line. The report should show fewer faces, or `FAILED`.

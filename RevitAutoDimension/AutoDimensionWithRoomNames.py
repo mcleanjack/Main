@@ -26,16 +26,11 @@
 # faces. Core faces have no documented API, so this uses the community-
 # established reference "<UniqueId>:-9999:<n>", and checks each candidate
 # by measuring it against the wall type's layer thicknesses before use.
-#   - If the Structure layer IS the core (core boundaries directly either
-#     side of it) or sits against a finished face, the dimension is
-#     attached to the wall and follows it if it moves.
-#   - If it isn't (e.g. core boundaries drawn around other layers too),
-#     Revit has nothing on the wall to attach to, so a 100mm detail line in
-#     '<Invisible lines>' style is placed at that face as an anchor
-#     (Comments = "AutoDim anchor"). Those dimensions won't follow the wall;
-#     fix the wall type's core boundaries to avoid them.
-# Walls with no Structure layer, stacked walls, or a line ending inside a
-# wall are skipped and named in the report.
+# So each face of the Structure layer must be a Core Boundary (or a
+# finished face): set the wall type up with the Core Boundary rows
+# directly either side of the Structure layer. Walls where that isn't so,
+# walls with no Structure layer, stacked walls, and walls the line ends
+# inside are skipped and named in the report.
 #
 # All changes happen in one Dynamo transaction: a single Ctrl+Z in Revit
 # undoes the whole run.
@@ -70,7 +65,6 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, Wall, WallKind, CurveElement, Line, XYZ,
     UV, Reference, ReferenceArray, SubTransaction, HostObjectUtils,
     ShellLayerType, PlanarFace, MaterialFunctionAssignment,
-    BuiltInCategory, GraphicsStyleType,
     ViewPlan, PlanViewPlane, DimensionType, DimensionStyleType,
     BuiltInParameter
 )
@@ -98,9 +92,6 @@ CORE_CHECK_TOL = 0.002       # ~0.6 mm: core ref must measure within this
 # Community findings: 1 = wall centre, 2/3 = the two core faces,
 # 4 = core centre. Each candidate is verified by measurement before use.
 CORE_INDEX_CANDIDATES = [2, 3]
-MM = 1.0 / 304.8
-ANCHOR_HALF_LENGTH = 50 * MM # anchor lines are 100 mm long
-ANCHOR_COMMENT = "AutoDim anchor"
 
 
 # ----------------------------------------------------------------------------
@@ -444,66 +435,24 @@ def ref_at_offset(wall, view, dim_line, ref_ext, ref_int, offset, total):
     return None
 
 
-def invisible_line_style():
-    """The '<Invisible lines>' line style, or None if it can't be found."""
-    try:
-        lines = doc.Settings.Categories.get_Item(BuiltInCategory.OST_Lines)
-        for sub in lines.SubCategories:
-            if "invisible" in sub.Name.lower():
-                return sub.GetGraphicsStyle(GraphicsStyleType.Projection)
-    except Exception:
-        pass
-    return None
-
-
-def make_anchor(view, start, direction, t, style):
-    """Short detail line square to the dimension line at distance t along
-    it, for layer faces Revit gives no wall reference to. Returns the
-    line's reference."""
-    p = start.Add(direction.Multiply(t))
-    perp = XYZ(-direction.Y, direction.X, 0.0)
-    seg = Line.CreateBound(p.Subtract(perp.Multiply(ANCHOR_HALF_LENGTH)),
-                           p.Add(perp.Multiply(ANCHOR_HALF_LENGTH)))
-    dc = doc.Create.NewDetailCurve(view, seg)
-    if style is not None:
-        try:
-            dc.LineStyle = style
-        except Exception:
-            pass
-    try:
-        dc.get_Parameter(
-            BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS).Set(ANCHOR_COMMENT)
-    except Exception:
-        pass
-    return dc.GeometryCurve.Reference
-
-
-def offset_hits(wall, view, dim_line, ext, inn, layers, offsets, anchor):
+def offset_hits(wall, view, dim_line, ext, inn, layers, offsets):
     """Dimension points for one wall at the given distances in from its
     exterior finish face. ext / inn are (t, cos_angle, ref) of the finish
-    faces the line crosses. `anchor(t)` makes a stand-in reference where
-    the wall has none; if anchor is None such walls return None.
-    Returns ([(t, ref), ...], anchors_made) or None."""
+    faces the line crosses. Returns [(t, ref), ...], or None if the wall
+    has no reference at one of the distances (i.e. it isn't a finish or
+    core face)."""
     total = sum(layers[0])
     t_ext, cos_ext, ref_ext = ext
     t_int, _, ref_int = inn
     step = 1.0 if t_int > t_ext else -1.0
     out = []
-    made = 0
     for offset in offsets:
-        t = t_ext + step * offset / cos_ext
         ref = ref_at_offset(wall, view, dim_line, ref_ext, ref_int,
                             offset, total)
         if ref is None:
-            if anchor is None:
-                return None
-            try:
-                ref = anchor(t)
-            except Exception:
-                return None
-            made += 1
-        out.append((t, ref))
-    return out, made
+            return None
+        out.append((t_ext + step * offset / cos_ext, ref))
+    return out
 
 
 def collect_face_hits(view, a, b, direction, dim_line, include_others,
@@ -517,12 +466,6 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
     cut_z = get_cut_plane_z(view)
     level_z = get_level_z(view)
     zs_base = [cut_z, level_z + ROOM_PROBE_HEIGHT]
-    start = XYZ(a.X, a.Y, dim_line.GetEndPoint(0).Z)
-    style = invisible_line_style()
-
-    def anchor(t):
-        return make_anchor(view, start, direction, t, style)
-
     hits = []
     for wall in collect_walls(view):
         if not wall_bbox_hits_line(wall, view, a, b):
@@ -546,20 +489,22 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
         offsets = structure_offsets(layers) if clean else None
         if offsets:
             res = offset_hits(wall, view, dim_line, ext[0], inn[0], layers,
-                              offsets, anchor)
+                              offsets)
             if res:
-                hits.extend(res[0])
+                hits.extend(res)
                 stats["structure"] += 1
-                stats["anchors"] += res[1]
                 continue
 
+        if offsets:
+            why = ("Structure layer isn't between the Core Boundary rows "
+                   "in its wall type")
+        elif layers is not None and not clean:
+            why = "line doesn't cross it cleanly"
+        elif layers is None:
+            why = "no layer structure"
+        else:
+            why = "no Structure layer"
         if not include_others:
-            if offsets or (layers is not None and not clean):
-                why = "line doesn't cross it cleanly"
-            elif layers is None:
-                why = "no layer structure"
-            else:
-                why = "no Structure layer"
             notes.append("Wall %s skipped (%s)" % (wall.Id, why))
             stats["skipped"] += 1
             continue
@@ -567,9 +512,9 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
         if clean:
             core = core_offsets(layers)
             res = core and offset_hits(wall, view, dim_line, ext[0],
-                                       inn[0], layers, core, None)
+                                       inn[0], layers, core)
             if res:
-                hits.extend(res[0])
+                hits.extend(res)
                 stats["core"] += 1
                 continue
         hits.extend((t, ref) for t, _, ref in ext + inn)
@@ -602,8 +547,7 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
     dim_line = Line.CreateBound(curve.GetEndPoint(0), curve.GetEndPoint(1))
 
     notes = []
-    stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0,
-             "anchors": 0}
+    stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0}
     hits = collect_face_hits(view, a, b, direction, dim_line,
                              include_others, stats, notes)
     if len(hits) < 2:
@@ -616,7 +560,6 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
     for _, ref in hits:
         refs.Append(ref)
 
-    doc.Regenerate()    # anchor lines need their geometry before use
     if dim_type is not None:
         dim = doc.Create.NewDimension(view, dim_line, refs, dim_type)
     else:
@@ -648,10 +591,6 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
         parts.append("%d skipped" % stats["skipped"])
     msg = ("Line %s: %d faces dimensioned (walls: %s), %d room label(s)."
            % (line_elem.Id, len(hits), ", ".join(parts), labelled))
-    if stats["anchors"]:
-        msg += (" %d invisible anchor line(s) added where the layer isn't "
-                "the wall's core (Comments = '%s')."
-                % (stats["anchors"], ANCHOR_COMMENT))
     if notes:
         msg += " " + "; ".join(notes) + "."
     return dim, msg
@@ -692,7 +631,7 @@ def main():
     try:
         for element in elements:
             # One sub-transaction per line: a failed line leaves nothing
-            # behind (e.g. anchor lines), the others still go through.
+            # behind, the others still go through.
             st = SubTransaction(doc)
             st.Start()
             try:
