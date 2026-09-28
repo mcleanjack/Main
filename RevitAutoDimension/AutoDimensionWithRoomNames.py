@@ -124,8 +124,13 @@ CONNECT_TOL = 0.1            # ~30 mm: line ends this close are "connected"
 CORE_CHECK_TOL = 0.002       # ~0.6 mm: core ref must measure within this
 # "<UniqueId>:-9999:<n>" indices tried for core faces (see core_reference).
 # Community findings: 1 = wall centre, 2/3 = the two core faces,
-# 4 = core centre. Each candidate is verified by measurement before use.
-CORE_INDEX_CANDIDATES = [2, 3]
+# 4 = core centre. That numbering is undocumented and may differ for walls
+# with more layers, so 2 and 3 are tried first, then 1 and 4-12. Each
+# candidate is verified by measurement before use, so a wrong one is never
+# used.
+CORE_INDEX_CANDIDATES = [2, 3, 1] + list(range(4, 13))
+# Per wall: what each candidate measured, for the report if none fit.
+CORE_DIAG = {}
 
 
 # ----------------------------------------------------------------------------
@@ -585,14 +590,23 @@ def ref_at_offset(wall, view, dim_line, ref_ext, ref_int, offset, total):
         return ref_int
     # Check each candidate by measuring from the exterior finish face, and
     # failing that from the interior finish face.
+    measured = []
     for anchor, expected in ((ref_ext, offset), (ref_int, total - offset)):
         for index in CORE_INDEX_CANDIDATES:
             ref = core_reference(wall, index)
             if ref is None:
+                if anchor is ref_ext:
+                    measured.append("%d=no ref" % index)
                 continue
             v = measure(view, dim_line, anchor, ref)
             if v is not None and abs(v - expected) < CORE_CHECK_TOL:
                 return ref
+            if anchor is ref_ext:
+                measured.append("%d=%s" % (
+                    index, "-" if v is None else "%g" % round(v / MM, 1)))
+    CORE_DIAG[str(wall.Id)] = ("wanted %g mm in from the outside; "
+                               "references measured: %s"
+                               % (round(offset / MM, 1), ", ".join(measured)))
     return None
 
 
@@ -682,6 +696,8 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
         if offsets:
             why = ("Structure layer isn't between the Core Boundary rows "
                    "in its wall type")
+            if str(wall.Id) in CORE_DIAG:
+                why += "; " + CORE_DIAG[str(wall.Id)]
         elif layers is not None and not clean:
             why = ("line doesn't cross it cleanly: %d exterior / %d "
                    "interior face(s) hit" % (len(ext), len(inn)))
