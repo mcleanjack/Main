@@ -179,8 +179,8 @@ like, then click **Finish** on the Options Bar (or press Enter).
 
 **Full: with options**
 
-Add input ports to the Python node with the **+** button until it has five
-(`IN[0]`–`IN[4]`), then wire:
+Add input ports to the Python node with the **+** button until it has six
+(`IN[0]`–`IN[5]`), then wire:
 
 | Port | Node | Purpose |
 |---|---|---|
@@ -189,6 +189,24 @@ Add input ports to the Python node with the **+** button until it has five
 | `IN[2]` | **Boolean** | `True` = "101 Kitchen", `False` = "Kitchen". |
 | `IN[3]` | **Boolean** | `True` deletes the sketch line after dimensioning. |
 | `IN[4]` | **Boolean** | Walls with **no** Structure layer: `False` (default) = skip them, `True` = dimension to their core (or finished) faces. |
+| `IN[5]` | **Number** | **Wall pick-up height** in mm above the view's level, e.g. `1200`. Walls are only picked up where your line crosses them at this height. Leave blank (or wire nothing useful) for automatic. See below. |
+
+**Wall pick-up height (`IN[5]`)**
+
+- **Blank (automatic):** walls are picked up at the view's cut-plane
+  height. If the line misses a wall there (e.g. it passes through a
+  window or door), the script tries heights up the whole wall, so the
+  wall above the head or below the sill is still found.
+- **A number, e.g. `1200`:** walls are picked up **only** where the line
+  crosses them at 1200 mm above the view's level. This is useful for
+  leaving out low walls (e.g. a 900 mm half-height wall: set 1200) or
+  dimensioning at a specific height. A wall with a window or door at that
+  height is **not** picked up there, because at that height it's an
+  opening.
+- Pick a height inside the walls you want, not 0. Right at the floor
+  line, the wall faces start exactly at the level and may be missed.
+- The report confirms the height used, e.g.
+  `Picking up walls at 1200 mm above the view's level.`
 
 If `IN[0]` is wired to *Select Model Element(s)*, click **Select** again
 for each new line. Otherwise the run re-dimensions the same line. If

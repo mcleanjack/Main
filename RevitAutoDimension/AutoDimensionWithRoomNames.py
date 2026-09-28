@@ -59,6 +59,11 @@
 #   IN[4]  Include walls with no Structure layer (bool). Default False =
 #          skip them. True = dimension them to their core faces, or their
 #          finished faces if they have no core.
+#   IN[5]  Wall pick-up height in mm above the view's level (number), e.g.
+#          1200. Walls are only picked up where the line crosses them at
+#          this height. Blank = automatic: the view's cut plane first,
+#          then heights up the whole wall (so a line through a window or
+#          door still finds the wall above the head / below the sill).
 #
 # Re-running: Dynamo normally only re-runs a node when one of its inputs
 # changes. In Manual run mode this script flags its own node after each
@@ -105,6 +110,7 @@ PARALLEL_COS = math.cos(math.radians(1.0))   # face must be within 1 deg of
                                              # perpendicular to the line
 ROOM_PROBE_HEIGHT = 1.0      # probe rooms 1 ft above the view's level
 FACE_Z_SAMPLES = 24          # heights tried up each wall face (openings)
+MM = 1.0 / 304.8              # feet per mm
 CONNECT_TOL = 0.1            # ~30 mm: line ends this close are "connected"
 CORE_CHECK_TOL = 0.002       # ~0.6 mm: core ref must measure within this
 # "<UniqueId>:-9999:<n>" indices tried for core faces (see core_reference).
@@ -131,6 +137,17 @@ def _as_list(value):
     if isinstance(value, (list, tuple)):
         return list(value)
     return [value]
+
+
+def height_mm(value):
+    """IN[5] as a number of mm, or None if blank / not a number. A
+    Boolean (e.g. an old Refresh toggle left wired here) counts as blank."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(str(value).strip().lower().replace("mm", ""))
+    except (TypeError, ValueError):
+        return None
 
 
 def _unwrap(value):
@@ -421,9 +438,10 @@ def intersect_face(face, a, b, direction, z_candidates):
     return None
 
 
-def wall_side_hits(wall, side, a, b, direction, zs_base):
+def wall_side_hits(wall, side, a, b, direction, zs_base, sample_face=True):
     """[(t, cos_angle, Reference)] for this wall's side faces on one side
-    that the line crosses."""
+    that the line crosses at the heights in zs_base (plus heights up the
+    whole face if sample_face)."""
     hits = []
     try:
         refs = HostObjectUtils.GetSideFaces(wall, side)
@@ -437,7 +455,8 @@ def wall_side_hits(wall, side, a, b, direction, zs_base):
         if face is None:
             continue
         hit = intersect_face(face, a, b, direction,
-                             zs_base + face_z_samples(face))
+                             zs_base + (face_z_samples(face)
+                                        if sample_face else []))
         if hit is not None:
             hits.append((hit[0], hit[1], ref))
     return hits
@@ -579,7 +598,7 @@ def offset_hits(wall, view, dim_line, ext, inn, layers, offsets):
 
 
 def collect_face_hits(view, a, b, direction, dim_line, include_others,
-                      stats, notes):
+                      stats, notes, pick_z=None):
     """Return a sorted, de-duplicated list of (distance_along_line,
     Reference) for every wall face to dimension along the line.
 
@@ -587,10 +606,16 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
     External walls (type Function = Exterior) also get their outer face.
     Other walls without a Structure layer are skipped, unless
     include_others is True, in which case they use their core faces, or
-    failing that finished faces."""
-    cut_z = get_cut_plane_z(view)
-    level_z = get_level_z(view)
-    zs_base = [cut_z, level_z + ROOM_PROBE_HEIGHT]
+    failing that finished faces.
+
+    pick_z: absolute height to pick walls up at (IN[5]), or None for
+    automatic (cut plane, then up the whole face)."""
+    if pick_z is not None:
+        zs_base, sample_face = [pick_z], False
+    else:
+        zs_base = [get_cut_plane_z(view),
+                   get_level_z(view) + ROOM_PROBE_HEIGHT]
+        sample_face = True
     hits = []
     for wall in collect_walls(view):
         if not wall_bbox_hits_line(wall, view, a, b):
@@ -602,9 +627,9 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
         except Exception:
             pass
         ext = wall_side_hits(wall, ShellLayerType.Exterior, a, b,
-                             direction, zs_base)
+                             direction, zs_base, sample_face)
         inn = wall_side_hits(wall, ShellLayerType.Interior, a, b,
-                             direction, zs_base)
+                             direction, zs_base, sample_face)
         if not ext and not inn:
             continue
 
@@ -760,7 +785,7 @@ def direction_groups(chain):
 # Building the dimension
 # ----------------------------------------------------------------------------
 
-def group_hits(view, axis, members, include_others, stats, notes):
+def group_hits(view, axis, members, include_others, stats, notes, pick_z):
     """Every wall face crossed by any line in the group, as a sorted,
     de-duplicated list of (s, Reference), s = distance along the axis."""
     hits = []
@@ -769,7 +794,7 @@ def group_hits(view, axis, members, include_others, stats, notes):
                                     XYZ(line.b.X, line.b.Y, line.z))
         for t, ref in collect_face_hits(view, line.a, line.b, axis,
                                         dim_line, include_others,
-                                        stats, notes):
+                                        stats, notes, pick_z):
             hits.append((line.s_a + t, ref))
     hits.sort(key=lambda h: h[0])
     deduped = []
@@ -820,13 +845,14 @@ def segment_midpoints(segments, hits, axis, members):
 
 
 def dimension_group(view, axis, members, dim_type, include_number, rooms,
-                    include_others):
+                    include_others, pick_z):
     """One dimension string for a group of parallel, connected lines.
     Returns (Dimension or None, message)."""
     notes = []
     stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0,
              "outer": 0}
-    hits = group_hits(view, axis, members, include_others, stats, notes)
+    hits = group_hits(view, axis, members, include_others, stats, notes,
+                      pick_z)
     ids = ", ".join(str(line.element.Id) for line in members)
     label = "Line" if len(members) == 1 else "Lines"
     if len(hits) < 2:
@@ -918,6 +944,12 @@ def main():
     include_number = bool(_in(2, False))
     delete_line = bool(_in(3, False))
     include_others = bool(_in(4, False))
+    pick_height = height_mm(_in(5))
+    pick_z = (get_level_z(view) + pick_height * MM
+              if pick_height is not None else None)
+    if pick_height is not None:
+        report.append("Picking up walls at %g mm above the view's level."
+                      % pick_height)
     rooms = RoomFinder(view, get_level_z(view) + ROOM_PROBE_HEIGHT,
                        get_view_phase(view))
 
@@ -941,7 +973,7 @@ def main():
                 for axis, members in direction_groups(chain):
                     dim, msg = dimension_group(
                         view, axis, members, dim_type, include_number,
-                        rooms, include_others)
+                        rooms, include_others, pick_z)
                     report.append(msg)
                     if dim is not None:
                         made.append(dim)
