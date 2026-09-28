@@ -11,11 +11,10 @@
 #      drawn across the building in a plan view (wired in, or picked on
 #      screen when the graph runs).
 #   2. Finds every wall the line crosses in the active plan view and
-#      picks two faces to dimension on each, in this order of preference:
-#        a. the two faces of the wall's 90mm layer (IN[5]), e.g. the stud
-#           framing, not the plasterboard or cladding either side;
-#        b. otherwise the two faces of the wall's CORE (IN[4]);
-#        c. otherwise the finished (outer) faces.
+#      dimensions ONLY to the faces of its Structure [1] layer(s), as set
+#      in the wall type (Edit Type > Structure > Edit, Function column),
+#      e.g. the 90mm timber frame, not the plasterboard either side.
+#      Walls with no Structure layer are skipped (IN[4] can include them).
 #   3. Creates ONE continuous linear dimension string along the drawn line
 #      through all of those faces.
 #   4. For each segment of the string, looks up the Room at the segment's
@@ -27,16 +26,16 @@
 # faces. Core faces have no documented API, so this uses the community-
 # established reference "<UniqueId>:-9999:<n>", and checks each candidate
 # by measuring it against the wall type's layer thicknesses before use.
-#   - If the 90mm layer IS the core (or sits against a finished face), the
-#     dimension is attached to the wall and follows it if it moves.
+#   - If the Structure layer IS the core (core boundaries directly either
+#     side of it) or sits against a finished face, the dimension is
+#     attached to the wall and follows it if it moves.
 #   - If it isn't (e.g. core boundaries drawn around other layers too),
 #     Revit has nothing on the wall to attach to, so a 100mm detail line in
 #     '<Invisible lines>' style is placed at that face as an anchor
 #     (Comments = "AutoDim anchor"). Those dimensions won't follow the wall;
 #     fix the wall type's core boundaries to avoid them.
-# Walls with no 90mm layer, or whose core can't be verified (stacked walls,
-# a line ending inside the wall, etc.), fall back as above and the report
-# says so.
+# Walls with no Structure layer, stacked walls, or a line ending inside a
+# wall are skipped and named in the report.
 #
 # All changes happen in one Dynamo transaction: a single Ctrl+Z in Revit
 # undoes the whole run.
@@ -50,10 +49,9 @@
 #   IN[2]  Include room number (bool). True gives "101 Kitchen". Default
 #          False = name only.
 #   IN[3]  Delete the drawn line afterwards (bool). Default False.
-#   IN[4]  Core fallback (bool). Default True = walls without the IN[5]
-#          layer are dimensioned to their core. False = finished faces.
-#   IN[5]  Layer thickness to dimension to, in mm (number). Default 90.
-#          0 turns this off (core / finished faces only).
+#   IN[4]  Include walls with no Structure layer (bool). Default False =
+#          skip them. True = dimension them to their core faces, or their
+#          finished faces if they have no core.
 #
 # Output (OUT):
 #   [0] list of created Dimension elements
@@ -101,8 +99,6 @@ CORE_CHECK_TOL = 0.002       # ~0.6 mm: core ref must measure within this
 # 4 = core centre. Each candidate is verified by measurement before use.
 CORE_INDEX_CANDIDATES = [2, 3]
 MM = 1.0 / 304.8
-DEFAULT_TARGET_MM = 90.0     # layer to dimension to (IN[5])
-LAYER_MATCH_TOL = 0.5 * MM   # a layer "is 90mm" if within 0.5 mm
 ANCHOR_HALF_LENGTH = 50 * MM # anchor lines are 100 mm long
 ANCHOR_COMMENT = "AutoDim anchor"
 
@@ -125,15 +121,6 @@ def _as_list(value):
     if isinstance(value, (list, tuple)):
         return list(value)
     return [value]
-
-
-def layer_target(value):
-    """IN[5] in mm -> internal feet, or None to turn layer matching off."""
-    try:
-        mm = float(value)
-    except (TypeError, ValueError):
-        return None
-    return mm * MM if mm > 0 else None
 
 
 def _unwrap(value):
@@ -375,25 +362,26 @@ def wall_layers(wall):
             cs.GetFirstCoreLayerIndex(), cs.GetLastCoreLayerIndex())
 
 
-def target_layer_offsets(layers, target):
-    """Distances in from the exterior finish face to the two faces of the
-    layer that is `target` thick, or None if the wall has no such layer.
-    If several layers match, prefer a Structure layer, then one inside the
-    core, then the one nearest the exterior."""
-    widths, functions, first, last = layers
-    matches = [i for i, w in enumerate(widths)
-               if abs(w - target) < LAYER_MATCH_TOL]
-    if not matches:
-        return None
-
-    def rank(i):
-        return (0 if functions[i] == MaterialFunctionAssignment.Structure
-                else 1,
-                0 if first <= i <= last else 1,
-                i)
-    k = min(matches, key=rank)
-    start = sum(widths[:k])
-    return start, start + widths[k]
+def structure_offsets(layers):
+    """Distances in from the exterior finish face to the faces of the
+    wall's Structure [1] layers, or None if it has none. Adjacent
+    Structure layers count as one block (two faces); separate blocks,
+    e.g. a double stud wall, give two faces each."""
+    widths, functions, _, _ = layers
+    offsets = []
+    pos = 0.0
+    in_block = False
+    for width, function in zip(widths, functions):
+        is_structure = function == MaterialFunctionAssignment.Structure
+        if is_structure and not in_block:
+            offsets.append(pos)
+        elif in_block and not is_structure:
+            offsets.append(pos)
+        in_block = is_structure
+        pos += width
+    if in_block:
+        offsets.append(pos)
+    return offsets or None
 
 
 def core_offsets(layers):
@@ -518,15 +506,14 @@ def offset_hits(wall, view, dim_line, ext, inn, layers, offsets, anchor):
     return out, made
 
 
-def collect_face_hits(view, a, b, direction, dim_line, target, core_only,
+def collect_face_hits(view, a, b, direction, dim_line, include_others,
                       stats, notes):
     """Return a sorted, de-duplicated list of (distance_along_line,
     Reference) for every wall face to dimension along the line.
 
-    Per wall, in order of preference:
-      1. the faces of its `target`-thick layer (e.g. 90mm framing),
-      2. its core faces (if core_only),
-      3. its finished faces."""
+    Each wall is dimensioned to the faces of its Structure [1] layer(s).
+    Walls without one are skipped, unless include_others is True, in
+    which case they use their core faces, or failing that finished faces."""
     cut_z = get_cut_plane_z(view)
     level_z = get_level_z(view)
     zs_base = [cut_z, level_z + ROOM_PROBE_HEIGHT]
@@ -556,26 +543,35 @@ def collect_face_hits(view, a, b, direction, dim_line, target, core_only,
         layers = wall_layers(wall)
         clean = layers is not None and len(ext) == 1 and len(inn) == 1
 
-        if clean and target:
-            offsets = target_layer_offsets(layers, target)
-            res = offsets and offset_hits(wall, view, dim_line, ext[0],
-                                          inn[0], layers, offsets, anchor)
+        offsets = structure_offsets(layers) if clean else None
+        if offsets:
+            res = offset_hits(wall, view, dim_line, ext[0], inn[0], layers,
+                              offsets, anchor)
             if res:
                 hits.extend(res[0])
-                stats["layer"] += 1
+                stats["structure"] += 1
                 stats["anchors"] += res[1]
                 continue
-        if clean and core_only:
-            offsets = core_offsets(layers)
-            res = offsets and offset_hits(wall, view, dim_line, ext[0],
-                                          inn[0], layers, offsets, None)
+
+        if not include_others:
+            if offsets or (layers is not None and not clean):
+                why = "line doesn't cross it cleanly"
+            elif layers is None:
+                why = "no layer structure"
+            else:
+                why = "no Structure layer"
+            notes.append("Wall %s skipped (%s)" % (wall.Id, why))
+            stats["skipped"] += 1
+            continue
+
+        if clean:
+            core = core_offsets(layers)
+            res = core and offset_hits(wall, view, dim_line, ext[0],
+                                       inn[0], layers, core, None)
             if res:
                 hits.extend(res[0])
                 stats["core"] += 1
                 continue
-        if core_only:
-            notes.append("Wall %s: core faces not found, used finish faces"
-                         % wall.Id)
         hits.extend((t, ref) for t, _, ref in ext + inn)
         stats["finish"] += 1
 
@@ -596,7 +592,7 @@ def collect_face_hits(view, a, b, direction, dim_line, target, core_only,
 # ----------------------------------------------------------------------------
 
 def dimension_along_line(view, line_elem, dim_type, include_number,
-                         phase, room_z, core_only, target):
+                         phase, room_z, include_others):
     curve = line_from_element(line_elem)
     a = flat(curve.GetEndPoint(0))
     b = flat(curve.GetEndPoint(1))
@@ -606,12 +602,13 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
     dim_line = Line.CreateBound(curve.GetEndPoint(0), curve.GetEndPoint(1))
 
     notes = []
-    stats = {"layer": 0, "core": 0, "finish": 0, "anchors": 0}
-    hits = collect_face_hits(view, a, b, direction, dim_line, target,
-                             core_only, stats, notes)
+    stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0,
+             "anchors": 0}
+    hits = collect_face_hits(view, a, b, direction, dim_line,
+                             include_others, stats, notes)
     if len(hits) < 2:
         raise ValueError(
-            "Line %s crosses %d wall face(s) square to it; need at least 2. "
+            "Line %s found %d wall face(s) to dimension; need at least 2. "
             "Check the line runs perpendicular to the walls and fully "
             "through them." % (line_elem.Id, len(hits)))
 
@@ -643,13 +640,12 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
                 seg.Below = label
                 labelled += 1
 
-    parts = []
-    if target:
-        parts.append("%d on %gmm layer" % (stats["layer"],
-                                           round(target * 304.8, 1)))
-    if core_only:
+    parts = ["%d on Structure layer" % stats["structure"]]
+    if include_others:
         parts.append("%d on core" % stats["core"])
-    parts.append("%d on finish faces" % stats["finish"])
+        parts.append("%d on finish faces" % stats["finish"])
+    else:
+        parts.append("%d skipped" % stats["skipped"])
     msg = ("Line %s: %d faces dimensioned (walls: %s), %d room label(s)."
            % (line_elem.Id, len(hits), ", ".join(parts), labelled))
     if stats["anchors"]:
@@ -687,8 +683,7 @@ def main():
 
     include_number = bool(_in(2, False))
     delete_line = bool(_in(3, False))
-    core_only = bool(_in(4, True))
-    target = layer_target(_in(5, DEFAULT_TARGET_MM))
+    include_others = bool(_in(4, False))
     phase = get_view_phase(view)
     room_z = get_level_z(view) + ROOM_PROBE_HEIGHT
 
@@ -703,7 +698,7 @@ def main():
             try:
                 dim, msg = dimension_along_line(
                     view, element, dim_type, include_number, phase, room_z,
-                    core_only, target)
+                    include_others)
                 if delete_line:
                     doc.Delete(element.Id)
                 st.Commit()
