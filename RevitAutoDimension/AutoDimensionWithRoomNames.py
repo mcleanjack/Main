@@ -10,10 +10,12 @@
 #   1. Takes one or more straight Detail Lines / Model Lines that you have
 #      drawn across the building in a plan view (wired in, or picked on
 #      screen when the graph runs).
-#   2. Finds every wall the line crosses in the active plan view and, by
-#      default, dimensions to the two faces of each wall's CORE (e.g. the
-#      90mm stud framing, not the 10mm plasterboard either side). Set
-#      IN[4] to False to dimension to the finished faces instead.
+#   2. Finds every wall the line crosses in the active plan view and
+#      picks two faces to dimension on each, in this order of preference:
+#        a. the two faces of the wall's 90mm layer (IN[5]), e.g. the stud
+#           framing, not the plasterboard or cladding either side;
+#        b. otherwise the two faces of the wall's CORE (IN[4]);
+#        c. otherwise the finished (outer) faces.
 #   3. Creates ONE continuous linear dimension string along the drawn line
 #      through all of those faces.
 #   4. For each segment of the string, looks up the Room at the segment's
@@ -21,12 +23,20 @@
 #      so the room name sits underneath the numeric value. Segments that
 #      span a wall's core have no room, so they stay blank.
 #
-# How core faces are found: the Revit API has no documented call for them,
-# so this uses the community-established reference "<UniqueId>:-9999:<n>".
-# Each candidate is checked by measuring it against the wall type's finish
-# layer thicknesses before it is used. If a wall's core can't be verified
-# (no core defined, stacked wall, a wall split by the line, etc.) that wall
-# falls back to its finished faces and the report says so.
+# References: Revit only exposes a wall's finished faces and its core
+# faces. Core faces have no documented API, so this uses the community-
+# established reference "<UniqueId>:-9999:<n>", and checks each candidate
+# by measuring it against the wall type's layer thicknesses before use.
+#   - If the 90mm layer IS the core (or sits against a finished face), the
+#     dimension is attached to the wall and follows it if it moves.
+#   - If it isn't (e.g. core boundaries drawn around other layers too),
+#     Revit has nothing on the wall to attach to, so a 100mm detail line in
+#     '<Invisible lines>' style is placed at that face as an anchor
+#     (Comments = "AutoDim anchor"). Those dimensions won't follow the wall;
+#     fix the wall type's core boundaries to avoid them.
+# Walls with no 90mm layer, or whose core can't be verified (stacked walls,
+# a line ending inside the wall, etc.), fall back as above and the report
+# says so.
 #
 # All changes happen in one Dynamo transaction: a single Ctrl+Z in Revit
 # undoes the whole run.
@@ -40,8 +50,10 @@
 #   IN[2]  Include room number (bool). True gives "101 Kitchen". Default
 #          False = name only.
 #   IN[3]  Delete the drawn line afterwards (bool). Default False.
-#   IN[4]  Core faces only (bool). Default True = dimension to the core
-#          boundary of each wall. False = finished (outer) faces.
+#   IN[4]  Core fallback (bool). Default True = walls without the IN[5]
+#          layer are dimensioned to their core. False = finished faces.
+#   IN[5]  Layer thickness to dimension to, in mm (number). Default 90.
+#          0 turns this off (core / finished faces only).
 #
 # Output (OUT):
 #   [0] list of created Dimension elements
@@ -59,7 +71,8 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import (
     FilteredElementCollector, Wall, WallKind, CurveElement, Line, XYZ,
     UV, Reference, ReferenceArray, SubTransaction, HostObjectUtils,
-    ShellLayerType, PlanarFace,
+    ShellLayerType, PlanarFace, MaterialFunctionAssignment,
+    BuiltInCategory, GraphicsStyleType,
     ViewPlan, PlanViewPlane, DimensionType, DimensionStyleType,
     BuiltInParameter
 )
@@ -87,6 +100,11 @@ CORE_CHECK_TOL = 0.002       # ~0.6 mm: core ref must measure within this
 # Community findings: 1 = wall centre, 2/3 = the two core faces,
 # 4 = core centre. Each candidate is verified by measurement before use.
 CORE_INDEX_CANDIDATES = [2, 3]
+MM = 1.0 / 304.8
+DEFAULT_TARGET_MM = 90.0     # layer to dimension to (IN[5])
+LAYER_MATCH_TOL = 0.5 * MM   # a layer "is 90mm" if within 0.5 mm
+ANCHOR_HALF_LENGTH = 50 * MM # anchor lines are 100 mm long
+ANCHOR_COMMENT = "AutoDim anchor"
 
 
 # ----------------------------------------------------------------------------
@@ -107,6 +125,15 @@ def _as_list(value):
     if isinstance(value, (list, tuple)):
         return list(value)
     return [value]
+
+
+def layer_target(value):
+    """IN[5] in mm -> internal feet, or None to turn layer matching off."""
+    try:
+        mm = float(value)
+    except (TypeError, ValueError):
+        return None
+    return mm * MM if mm > 0 else None
 
 
 def _unwrap(value):
@@ -307,23 +334,75 @@ def intersect_face(face, a, b, direction, z_candidates):
     return None
 
 
-def finish_thicknesses(wall):
-    """(exterior finish, interior finish) thickness either side of the
-    wall's core, from its compound structure. None if the wall type has
-    no layered structure or no core."""
+def wall_side_hits(wall, side, a, b, direction, zs_base):
+    """[(t, cos_angle, Reference)] for this wall's side faces on one side
+    that the line crosses."""
+    hits = []
+    try:
+        refs = HostObjectUtils.GetSideFaces(wall, side)
+    except Exception:
+        return hits
+    for ref in refs:
+        try:
+            face = wall.GetGeometryObjectFromReference(ref)
+        except Exception:
+            continue
+        if face is None:
+            continue
+        hit = intersect_face(face, a, b, direction,
+                             zs_base + [face_mid_z(face)])
+        if hit is not None:
+            hits.append((hit[0], hit[1], ref))
+    return hits
+
+
+def wall_layers(wall):
+    """(widths, functions, first_core, last_core) from the wall type's
+    compound structure, exterior layer first (matching
+    ShellLayerType.Exterior). None for stacked/curtain/unlayered walls."""
     try:
         cs = wall.WallType.GetCompoundStructure()
     except Exception:
         return None
     if cs is None:
         return None
-    first = cs.GetFirstCoreLayerIndex()
-    last = cs.GetLastCoreLayerIndex()
+    layers = list(cs.GetLayers())
+    if not layers:
+        return None
+    widths = [layer.Width for layer in layers]
+    functions = [layer.Function for layer in layers]
+    return (widths, functions,
+            cs.GetFirstCoreLayerIndex(), cs.GetLastCoreLayerIndex())
+
+
+def target_layer_offsets(layers, target):
+    """Distances in from the exterior finish face to the two faces of the
+    layer that is `target` thick, or None if the wall has no such layer.
+    If several layers match, prefer a Structure layer, then one inside the
+    core, then the one nearest the exterior."""
+    widths, functions, first, last = layers
+    matches = [i for i, w in enumerate(widths)
+               if abs(w - target) < LAYER_MATCH_TOL]
+    if not matches:
+        return None
+
+    def rank(i):
+        return (0 if functions[i] == MaterialFunctionAssignment.Structure
+                else 1,
+                0 if first <= i <= last else 1,
+                i)
+    k = min(matches, key=rank)
+    start = sum(widths[:k])
+    return start, start + widths[k]
+
+
+def core_offsets(layers):
+    """Distances in from the exterior finish face to the two core faces,
+    or None if the wall type has no core boundaries."""
+    widths, _, first, last = layers
     if first < 0 or last < first:
         return None
-    widths = [layer.Width for layer in cs.GetLayers()]
-    # Layer 0 is on the exterior side, matching ShellLayerType.Exterior.
-    return sum(widths[:first]), sum(widths[last + 1:])
+    return sum(widths[:first]), sum(widths[:last + 1])
 
 
 def core_reference(wall, index):
@@ -332,7 +411,7 @@ def core_reference(wall, index):
     The Revit API has no documented call for core faces. The widely used
     workaround is the stable representation "<UniqueId>:-9999:<n>", where
     n selects the wall centre / core faces / core centre. Which n is which
-    is undocumented, so callers must verify the result (see resolve_core)."""
+    is undocumented, so callers must verify the result (see ref_at_offset)."""
     try:
         return Reference.ParseFromStableRepresentation(
             doc, "%s:-9999:%d" % (wall.UniqueId, index))
@@ -359,78 +438,104 @@ def measure(view, dim_line, ref_a, ref_b):
         st.RollBack()
 
 
-def resolve_core(wall, view, dim_line, finish_ref, finish_thk, candidates):
-    """Return the core-face reference that sits finish_thk in from the
-    finish face finish_ref, trying each candidate index. None if none of
-    them measures right."""
-    for index in candidates:
+def ref_at_offset(wall, view, dim_line, ref_ext, ref_int, offset, total):
+    """A reference on the wall itself that lies `offset` in from the
+    exterior finish face: a finish face or a core face (verified by
+    measuring it). None if the wall has no reference there."""
+    if offset < DEDUP_TOL:
+        return ref_ext
+    if total - offset < DEDUP_TOL:
+        return ref_int
+    for index in CORE_INDEX_CANDIDATES:
         ref = core_reference(wall, index)
         if ref is None:
             continue
-        v = measure(view, dim_line, finish_ref, ref)
-        if v is not None and abs(v - finish_thk) < CORE_CHECK_TOL:
+        v = measure(view, dim_line, ref_ext, ref)
+        if v is not None and abs(v - offset) < CORE_CHECK_TOL:
             return ref
     return None
 
 
-def wall_side_hits(wall, side, a, b, direction, zs_base):
-    """[(t, cos_angle, Reference)] for this wall's side faces on one side
-    that the line crosses."""
-    hits = []
+def invisible_line_style():
+    """The '<Invisible lines>' line style, or None if it can't be found."""
     try:
-        refs = HostObjectUtils.GetSideFaces(wall, side)
+        lines = doc.Settings.Categories.get_Item(BuiltInCategory.OST_Lines)
+        for sub in lines.SubCategories:
+            if "invisible" in sub.Name.lower():
+                return sub.GetGraphicsStyle(GraphicsStyleType.Projection)
     except Exception:
-        return hits
-    for ref in refs:
+        pass
+    return None
+
+
+def make_anchor(view, start, direction, t, style):
+    """Short detail line square to the dimension line at distance t along
+    it, for layer faces Revit gives no wall reference to. Returns the
+    line's reference."""
+    p = start.Add(direction.Multiply(t))
+    perp = XYZ(-direction.Y, direction.X, 0.0)
+    seg = Line.CreateBound(p.Subtract(perp.Multiply(ANCHOR_HALF_LENGTH)),
+                           p.Add(perp.Multiply(ANCHOR_HALF_LENGTH)))
+    dc = doc.Create.NewDetailCurve(view, seg)
+    if style is not None:
         try:
-            face = wall.GetGeometryObjectFromReference(ref)
+            dc.LineStyle = style
         except Exception:
-            continue
-        if face is None:
-            continue
-        hit = intersect_face(face, a, b, direction,
-                             zs_base + [face_mid_z(face)])
-        if hit is not None:
-            hits.append((hit[0], hit[1], ref))
-    return hits
+            pass
+    try:
+        dc.get_Parameter(
+            BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS).Set(ANCHOR_COMMENT)
+    except Exception:
+        pass
+    return dc.GeometryCurve.Reference
 
 
-def core_hits(wall, view, dim_line, ext, inn):
-    """Swap one wall's finish-face hits for its core-face hits.
-    ext / inn are (t, cos_angle, ref) of the exterior / interior finish
-    faces. Returns [(t, ref), (t, ref)] or None if the core can't be
-    resolved."""
-    thk = finish_thicknesses(wall)
-    if thk is None:
-        return None
-    ext_thk, int_thk = thk
+def offset_hits(wall, view, dim_line, ext, inn, layers, offsets, anchor):
+    """Dimension points for one wall at the given distances in from its
+    exterior finish face. ext / inn are (t, cos_angle, ref) of the finish
+    faces the line crosses. `anchor(t)` makes a stand-in reference where
+    the wall has none; if anchor is None such walls return None.
+    Returns ([(t, ref), ...], anchors_made) or None."""
+    total = sum(layers[0])
     t_ext, cos_ext, ref_ext = ext
-    t_int, cos_int, ref_int = inn
+    t_int, _, ref_int = inn
     step = 1.0 if t_int > t_ext else -1.0
+    out = []
+    made = 0
+    for offset in offsets:
+        t = t_ext + step * offset / cos_ext
+        ref = ref_at_offset(wall, view, dim_line, ref_ext, ref_int,
+                            offset, total)
+        if ref is None:
+            if anchor is None:
+                return None
+            try:
+                ref = anchor(t)
+            except Exception:
+                return None
+            made += 1
+        out.append((t, ref))
+    return out, made
 
-    # A side with no finish layers: its finish face IS the core face.
-    if ext_thk < DEDUP_TOL:
-        core_ext = ref_ext
-    else:
-        core_ext = resolve_core(wall, view, dim_line, ref_ext, ext_thk,
-                                CORE_INDEX_CANDIDATES)
-    if int_thk < DEDUP_TOL:
-        core_int = ref_int
-    else:
-        core_int = resolve_core(wall, view, dim_line, ref_int, int_thk,
-                                list(reversed(CORE_INDEX_CANDIDATES)))
-    if core_ext is None or core_int is None:
-        return None
-    return [(t_ext + step * ext_thk / cos_ext, core_ext),
-            (t_int - step * int_thk / cos_int, core_int)]
 
-
-def collect_face_hits(view, a, b, direction, dim_line, core_only, notes):
+def collect_face_hits(view, a, b, direction, dim_line, target, core_only,
+                      stats, notes):
     """Return a sorted, de-duplicated list of (distance_along_line,
-    Reference) for every wall face to dimension along the line."""
+    Reference) for every wall face to dimension along the line.
+
+    Per wall, in order of preference:
+      1. the faces of its `target`-thick layer (e.g. 90mm framing),
+      2. its core faces (if core_only),
+      3. its finished faces."""
     cut_z = get_cut_plane_z(view)
     level_z = get_level_z(view)
     zs_base = [cut_z, level_z + ROOM_PROBE_HEIGHT]
+    start = XYZ(a.X, a.Y, dim_line.GetEndPoint(0).Z)
+    style = invisible_line_style()
+
+    def anchor(t):
+        return make_anchor(view, start, direction, t, style)
+
     hits = []
     for wall in collect_walls(view):
         if not wall_bbox_hits_line(wall, view, a, b):
@@ -448,16 +553,31 @@ def collect_face_hits(view, a, b, direction, dim_line, core_only, notes):
         if not ext and not inn:
             continue
 
-        if core_only:
-            core = None
-            if len(ext) == 1 and len(inn) == 1:
-                core = core_hits(wall, view, dim_line, ext[0], inn[0])
-            if core is not None:
-                hits.extend(core)
+        layers = wall_layers(wall)
+        clean = layers is not None and len(ext) == 1 and len(inn) == 1
+
+        if clean and target:
+            offsets = target_layer_offsets(layers, target)
+            res = offsets and offset_hits(wall, view, dim_line, ext[0],
+                                          inn[0], layers, offsets, anchor)
+            if res:
+                hits.extend(res[0])
+                stats["layer"] += 1
+                stats["anchors"] += res[1]
                 continue
+        if clean and core_only:
+            offsets = core_offsets(layers)
+            res = offsets and offset_hits(wall, view, dim_line, ext[0],
+                                          inn[0], layers, offsets, None)
+            if res:
+                hits.extend(res[0])
+                stats["core"] += 1
+                continue
+        if core_only:
             notes.append("Wall %s: core faces not found, used finish faces"
                          % wall.Id)
         hits.extend((t, ref) for t, _, ref in ext + inn)
+        stats["finish"] += 1
 
     hits.sort(key=lambda h: h[0])
 
@@ -476,7 +596,7 @@ def collect_face_hits(view, a, b, direction, dim_line, core_only, notes):
 # ----------------------------------------------------------------------------
 
 def dimension_along_line(view, line_elem, dim_type, include_number,
-                         phase, room_z, core_only):
+                         phase, room_z, core_only, target):
     curve = line_from_element(line_elem)
     a = flat(curve.GetEndPoint(0))
     b = flat(curve.GetEndPoint(1))
@@ -486,8 +606,9 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
     dim_line = Line.CreateBound(curve.GetEndPoint(0), curve.GetEndPoint(1))
 
     notes = []
-    hits = collect_face_hits(view, a, b, direction, dim_line, core_only,
-                             notes)
+    stats = {"layer": 0, "core": 0, "finish": 0, "anchors": 0}
+    hits = collect_face_hits(view, a, b, direction, dim_line, target,
+                             core_only, stats, notes)
     if len(hits) < 2:
         raise ValueError(
             "Line %s crosses %d wall face(s) square to it; need at least 2. "
@@ -498,6 +619,7 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
     for _, ref in hits:
         refs.Append(ref)
 
+    doc.Regenerate()    # anchor lines need their geometry before use
     if dim_type is not None:
         dim = doc.Create.NewDimension(view, dim_line, refs, dim_type)
     else:
@@ -521,9 +643,19 @@ def dimension_along_line(view, line_elem, dim_type, include_number,
                 seg.Below = label
                 labelled += 1
 
-    msg = ("Line %s: %d %s faces dimensioned, %d room label(s)."
-           % (line_elem.Id, len(hits), "core" if core_only else "wall",
-              labelled))
+    parts = []
+    if target:
+        parts.append("%d on %gmm layer" % (stats["layer"],
+                                           round(target * 304.8, 1)))
+    if core_only:
+        parts.append("%d on core" % stats["core"])
+    parts.append("%d on finish faces" % stats["finish"])
+    msg = ("Line %s: %d faces dimensioned (walls: %s), %d room label(s)."
+           % (line_elem.Id, len(hits), ", ".join(parts), labelled))
+    if stats["anchors"]:
+        msg += (" %d invisible anchor line(s) added where the layer isn't "
+                "the wall's core (Comments = '%s')."
+                % (stats["anchors"], ANCHOR_COMMENT))
     if notes:
         msg += " " + "; ".join(notes) + "."
     return dim, msg
@@ -556,6 +688,7 @@ def main():
     include_number = bool(_in(2, False))
     delete_line = bool(_in(3, False))
     core_only = bool(_in(4, True))
+    target = layer_target(_in(5, DEFAULT_TARGET_MM))
     phase = get_view_phase(view)
     room_z = get_level_z(view) + ROOM_PROBE_HEIGHT
 
@@ -563,15 +696,21 @@ def main():
     TransactionManager.Instance.EnsureInTransaction(doc)
     try:
         for element in elements:
+            # One sub-transaction per line: a failed line leaves nothing
+            # behind (e.g. anchor lines), the others still go through.
+            st = SubTransaction(doc)
+            st.Start()
             try:
                 dim, msg = dimension_along_line(
                     view, element, dim_type, include_number, phase, room_z,
-                    core_only)
-                dims.append(dim)
-                report.append(msg)
+                    core_only, target)
                 if delete_line:
                     doc.Delete(element.Id)
+                st.Commit()
+                dims.append(dim)
+                report.append(msg)
             except Exception as ex:
+                st.RollBack()
                 report.append("FAILED: %s" % ex)
     finally:
         TransactionManager.Instance.TransactionTaskDone()
