@@ -51,6 +51,9 @@
 #          e.g. from "Select Model Element(s)". If nothing is wired, you are
 #          asked to click the line(s) in the active view when the graph
 #          runs; click Finish on the Options Bar (or press Enter) when done.
+#          A Boolean here also means "pick on screen". A NUMBER here also
+#          means "pick on screen" and is used as the wall pick-up height
+#          in mm (see IN[5]), so a single Number node on IN[0] is enough.
 #   IN[1]  Dimension type name (string), e.g. "Linear - 2.5mm Arial". Blank
 #          = the project's default linear dimension type.
 #   IN[2]  Include room number (bool). True gives "101 Kitchen". Default
@@ -925,10 +928,16 @@ def main():
                     "plan you drew the line in and run again."
                     % safe_name(view))
 
-    # A Boolean / number / text wired into IN[0] (e.g. a "Run" toggle) isn't
-    # a line: ignore it and fall back to picking on screen.
-    elements = [_unwrap(e) for e in _as_list(_in(0))
+    # A Boolean / number / text wired into IN[0] isn't a line, so it falls
+    # back to picking on screen. A number there is also taken as the wall
+    # pick-up height (same as IN[5]), so one Number node on IN[0] is all
+    # the setup that option needs.
+    raw_in0 = _as_list(_in(0))
+    elements = [_unwrap(e) for e in raw_in0
                 if not isinstance(e, (bool, int, float, str))]
+    in0_height = next((height_mm(e) for e in raw_in0
+                       if isinstance(e, (int, float))
+                       and not isinstance(e, bool)), None)
     if not elements:
         elements = pick_lines()
     if not elements:
@@ -945,6 +954,8 @@ def main():
     delete_line = bool(_in(3, False))
     include_others = bool(_in(4, False))
     pick_height = height_mm(_in(5))
+    if pick_height is None:
+        pick_height = in0_height
     pick_z = (get_level_z(view) + pick_height * MM
               if pick_height is not None else None)
     if pick_height is not None:
@@ -989,8 +1000,15 @@ def main():
         TransactionManager.Instance.TransactionTaskDone()
 
     if lines and not dims:
-        report.append("No dimensions made. Check the lines run "
-                      "perpendicular to the walls and fully through them.")
+        if pick_height is not None:
+            report.append("No dimensions made: no walls found at %g mm "
+                          "above the view's level. Lower the pick-up "
+                          "height, or set it blank for automatic."
+                          % pick_height)
+        else:
+            report.append("No dimensions made. Check the lines run "
+                          "perpendicular to the walls and fully through "
+                          "them.")
     return dims, "\n".join(report)
 
 
