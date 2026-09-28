@@ -189,11 +189,11 @@ Add input ports to the Python node with the **+** button until it has six
 | `IN[2]` | **Boolean** | `True` = "101 Kitchen", `False` = "Kitchen". |
 | `IN[3]` | **Boolean** | `True` deletes the sketch line after dimensioning. |
 | `IN[4]` | **Boolean** | Walls with **no** Structure layer: `False` (default) = skip them, `True` = dimension to their core (or finished) faces. |
-| `IN[5]` | **Number** | **Wall pick-up height** in mm above the view's level, e.g. `1200`. Walls are only picked up where your line crosses them at this height. Leave blank (or wire nothing useful) for automatic. See below. |
+| `IN[5]` | **Number** | **Wall pick-up height** in mm above the view's level, e.g. `1200`. Walls are only picked up where your line crosses them at this height. For automatic, remove this port (**−** button) or wire an empty **String** node, because an unconnected port stops the node running. See below. |
 
 **Wall pick-up height (`IN[5]`)**
 
-- **Blank (automatic):** walls are picked up at the view's cut-plane
+- **Blank (automatic)**, i.e. port removed or an empty String wired in: walls are picked up at the view's cut-plane
   height. If the line misses a wall there (e.g. it passes through a
   window or door), the script tries heights up the whole wall, so the
   wall above the head or below the sill is still found.
