@@ -54,11 +54,11 @@
 #   IN[4]  Include walls with no Structure layer (bool). Default False =
 #          skip them. True = dimension them to their core faces, or their
 #          finished faces if they have no core.
-#   IN[5]  Refresh (anything, e.g. a Boolean). Not read by the script. It
-#          is there so you can force a re-run: Dynamo only re-runs a node
-#          when one of its inputs changes, so a second click of Run with
-#          nothing changed does nothing. Flip this Boolean before each
-#          run, or run the graph from Dynamo Player instead.
+#
+# Re-running: Dynamo normally only re-runs a node when one of its inputs
+# changes. In Manual run mode this script flags its own node after each
+# run, so every click of Run executes it again with no toggling needed
+# (see flag_self_for_rerun at the bottom). Don't use Automatic mode.
 #
 # Output (OUT):
 #   [0] list of created Dimension elements
@@ -753,7 +753,10 @@ def main():
                     "plan you drew the line in and run again."
                     % safe_name(view))
 
-    elements = [_unwrap(e) for e in _as_list(_in(0))]
+    # A Boolean / number / text wired into IN[0] (e.g. a "Run" toggle) isn't
+    # a line: ignore it and fall back to picking on screen.
+    elements = [_unwrap(e) for e in _as_list(_in(0))
+                if not isinstance(e, (bool, int, float, str))]
     if not elements:
         elements = pick_lines()
     if not elements:
@@ -813,7 +816,41 @@ def main():
     return dims, "\n".join(report)
 
 
+# ----------------------------------------------------------------------------
+# Re-run on every click of Run
+# ----------------------------------------------------------------------------
+
+# Dynamo only re-runs a node whose inputs changed, so with nothing wired a
+# second click of Run would do nothing. This marker lets the script find its
+# own node and flag it as changed, so the next Run executes it again.
+SELF_MARKER = "AUTO_DIMENSION_RERUN_MARKER"
+
+
+def flag_self_for_rerun():
+    """Mark this Python node as modified so the next Run re-executes it.
+    Only in Manual run mode: in Automatic mode a modified node runs again
+    straight away, which would loop. Silently does nothing if Dynamo's
+    internals can't be reached (e.g. a different Dynamo version)."""
+    try:
+        clr.AddReference('DynamoRevitDS')
+        from Dynamo.Applications import DynamoRevit
+        try:
+            model = DynamoRevit.RevitDynamoModel
+        except Exception:
+            model = DynamoRevit().RevitDynamoModel
+        workspace = model.CurrentWorkspace
+        if str(workspace.RunSettings.RunType) != "Manual":
+            return
+        for node in workspace.Nodes:
+            script = getattr(node, "Script", None)
+            if script and SELF_MARKER in script:
+                node.MarkNodeAsModified(True)
+    except Exception:
+        pass
+
+
 try:
     OUT = main()
 except Exception:
     OUT = [], "Unexpected error:\n" + traceback.format_exc()
+flag_self_for_rerun()

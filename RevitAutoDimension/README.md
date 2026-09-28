@@ -126,21 +126,21 @@ The report names each skipped wall and why, e.g.
 When it runs, Revit asks you to click the line(s). Click as many as you
 like, then click **Finish** on the Options Bar (or press Enter).
 
-> **Running it more than once:** Dynamo only re-runs a node when one of
-> its inputs has changed. With nothing wired in, a second click of
-> **Run** does nothing: no pick prompt, no dimension. Use one of these:
-> - **Dynamo Player (recommended):** run the saved graph from
->   *Manage → Dynamo Player*. Player re-runs the whole graph each time
->   you press Play, so you get a pick prompt every time.
-> - **Refresh toggle in Dynamo:** add a 6th input (`IN[5]`), wire a
->   **Boolean** node into it, and flip it (True ↔ False) before each run.
->   The script ignores its value. Changing it just makes Dynamo re-run the
->   node.
+> **Running it more than once:** just click **Run** again. Dynamo
+> normally only re-runs a node when one of its inputs has changed. So in
+> **Manual** mode, the script flags its own node after each run, and the
+> next click of Run always executes it again. You don't need to toggle or
+> unwire anything. Keep Dynamo in **Manual** mode: in Automatic mode the
+> self-flagging is switched off, to avoid an endless loop of pick prompts.
+>
+> If Run ever does nothing (e.g. a Dynamo version where the script can't
+> reach the node), run the saved graph from *Manage → Dynamo Player*
+> instead. Player re-runs the whole graph each time you press Play.
 
 **Full: with options**
 
-Add input ports to the Python node with the **+** button until it has six
-(`IN[0]`–`IN[5]`), then wire:
+Add input ports to the Python node with the **+** button until it has five
+(`IN[0]`–`IN[4]`), then wire:
 
 | Port | Node | Purpose |
 |---|---|---|
@@ -149,12 +149,14 @@ Add input ports to the Python node with the **+** button until it has six
 | `IN[2]` | **Boolean** | `True` = "101 Kitchen", `False` = "Kitchen". |
 | `IN[3]` | **Boolean** | `True` deletes the sketch line after dimensioning. |
 | `IN[4]` | **Boolean** | Walls with **no** Structure layer: `False` (default) = skip them, `True` = dimension to their core (or finished) faces. |
-| `IN[5]` | **Boolean** | **Refresh.** Flip it before each run in the Dynamo window to force a re-run (see the note above). Not needed in Dynamo Player. |
 
-If `IN[0]` is wired to *Select Model Element(s)*, re-running with the
-**same** line selected does nothing, because the input hasn't changed.
-Click **Select** again for the new line. If `IN[3]` deleted the line, the
-report says the line no longer exists.
+If `IN[0]` is wired to *Select Model Element(s)*, click **Select** again
+for each new line. Otherwise the run re-dimensions the same line. If
+`IN[3]` deleted the line, the report says it no longer exists.
+
+A Boolean (e.g. a "Run" toggle) wired into `IN[0]` is ignored, and you're
+asked to pick lines on screen, the same as leaving it unwired. You don't
+need a Run toggle at all.
 
 Wire the output into a **Watch** node. `OUT[0]` is the list of new
 dimensions and `OUT[1]` is a text report.
