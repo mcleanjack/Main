@@ -79,7 +79,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 slab-2"
+SCRIPT_VERSION = "2026-09-29 slab-3"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: edges closer than this count as one
@@ -588,11 +588,13 @@ SELF_MARKER = "SLAB_DIMENSION_RERUN_MARKER"
 
 def flag_self_for_rerun():
     """Mark this Python node as modified so the next Run re-executes it.
-    Dynamo clears that flag when it prepares a run, before executing, so
-    setting it here (during the run) lasts until the next click of Run.
 
-    Only in Manual run mode, so Automatic mode never re-prompts for lines
-    on its own. Returns None on success, else a short reason."""
+    Done twice, to be safe across Dynamo versions: straight away, and
+    again once this run has fully finished (Dynamo's EvaluationCompleted
+    event), in case anything clears the flag at the end of the run.
+
+    Only in Manual run mode, so Automatic mode never re-prompts on its own.
+    Returns None on success, else a short reason."""
     try:
         clr.AddReference('DynamoRevitDS')
         from Dynamo.Applications import DynamoRevit
@@ -611,15 +613,42 @@ def flag_self_for_rerun():
             manual = str(run_type) in ("Manual", "0")
         if not manual:
             return "Dynamo isn't in Manual run mode"
-        flagged = 0
-        for node in workspace.Nodes:
-            script = getattr(node, "Script", None)
-            if script and SELF_MARKER in script:
-                node.MarkNodeAsModified(True)
-                flagged += 1
-        return None if flagged else "couldn't find this Python node"
+        nodes = [node for node in workspace.Nodes
+                 if SELF_MARKER in (getattr(node, "Script", None) or "")]
+        if not nodes:
+            return "couldn't find this Python node"
     except Exception as ex:
         return "couldn't reach Dynamo (%s)" % ex
+
+    def mark():
+        for node in nodes:
+            node.MarkNodeAsModified(True)
+
+    try:
+        mark()
+    except Exception as ex:
+        return "couldn't flag the node (%s)" % ex
+
+    done = []
+
+    def on_run_finished(sender, args):
+        if done:
+            return
+        done.append(True)
+        try:
+            mark()
+        except Exception:
+            pass
+        try:
+            workspace.EvaluationCompleted -= on_run_finished
+        except Exception:
+            pass
+
+    try:
+        workspace.EvaluationCompleted += on_run_finished
+    except Exception:
+        pass    # the immediate flag above still applies
+    return None
 
 
 try:
