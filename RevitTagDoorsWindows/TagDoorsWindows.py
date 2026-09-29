@@ -72,7 +72,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-13"
+SCRIPT_VERSION = "2026-09-29 tag-14"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -130,7 +130,7 @@ STORAGE_PARAM = "For Storage"
 # tag is the elevation type switches that tag back to the plan type.
 WINDOW_TAG_FAMILY = "GH-AN-Tag_Window"
 WINDOW_TAG_ELEVATION_TYPE = "Elevations"
-WINDOW_TAG_PLAN_TYPE = None
+WINDOW_TAG_PLAN_TYPE = "Standard"
 
 
 # ----------------------------------------------------------------------------
