@@ -169,12 +169,14 @@ The report names each skipped wall and why, e.g.
 When it runs, Revit asks you to click the line(s). Click as many as you
 like, then click **Finish** on the Options Bar (or press Enter).
 
-> **Running it more than once:** just click **Run** again. Dynamo
-> normally only re-runs a node when one of its inputs has changed. So in
-> **Manual** mode, the script flags its own node after each run, and the
-> next click of Run always executes it again. You don't need to toggle or
-> unwire anything. Keep Dynamo in **Manual** mode: in Automatic mode the
-> self-flagging is switched off, to avoid an endless loop of pick prompts.
+> **Running it more than once:** just click **Run** again. Dynamo only
+> re-runs a node when one of its inputs has changed. So in **Manual**
+> mode, at the end of each run the script **flips the Boolean wired into
+> `IN[0]`** (True ↔ False). You'll see it change. Its value is ignored,
+> but Dynamo counts it as a change, so the next click of Run always
+> executes the node again. This needs a **Boolean node wired into
+> `IN[0]`**. Keep Dynamo in **Manual** mode: in Automatic mode this is
+> switched off, to avoid an endless loop of pick prompts.
 >
 > If Run ever does nothing (e.g. a Dynamo version where the script can't
 > reach the node), run the saved graph from *Manage → Dynamo Player*

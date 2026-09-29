@@ -83,9 +83,11 @@ the first point of the string.
 Wire `OUT` into a **Watch** node. The first line shows the script version,
 e.g. `Slab Auto-Dimension script version 2026-09-29 slab-2`.
 
-**Running it again:** just click **Run**. In Manual mode the script flags
-itself to run again next time, so no toggling or re-wiring is needed. Or
-run the saved graph from **Manage → Dynamo Player**.
+**Running it again:** just click **Run**. At the end of each run (Manual
+mode) the script flips the Boolean on `IN[0]` (True ↔ False). Its value is
+ignored, but Dynamo counts it as a change, so the next Run executes again.
+Keep a **Boolean wired into `IN[0]`** for this. Or run the saved graph from
+**Manage → Dynamo Player**.
 
 ---
 

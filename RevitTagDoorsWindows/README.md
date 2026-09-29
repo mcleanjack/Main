@@ -138,8 +138,10 @@ Details:
 - Tags are placed at the window/door's insertion point, the same as
   Tag By Category. Move them afterwards if needed.
 - **One Ctrl+Z** undoes all the tags from a run.
-- **Running again:** just click **Run**. In Manual mode the script flags
-  itself to run again next time.
+- **Running again:** just click **Run**. At the end of each run (Manual
+  mode) the script flips the Boolean on `IN[0]` (True ↔ False). Its value
+  is ignored, but Dynamo counts it as a change, so the next Run executes
+  again. Keep a **Boolean wired into `IN[0]`** for this.
 
 ---
 

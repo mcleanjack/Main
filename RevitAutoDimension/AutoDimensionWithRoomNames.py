@@ -114,7 +114,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 rerun-2"
+SCRIPT_VERSION = "2026-09-29 rerun-3"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -1187,12 +1187,28 @@ def main():
 SELF_MARKER = "AUTO_DIMENSION_RERUN_MARKER"
 
 
-def flag_self_for_rerun():
-    """Mark this Python node as modified so the next Run re-executes it.
+def _input0_boolean(node):
+    """The Boolean node wired into this node's IN[0], or None."""
+    try:
+        for connector in node.InPorts[0].Connectors:
+            source = connector.Start.Owner
+            if source.GetType().Name == "BoolSelector":
+                return source
+    except Exception:
+        pass
+    return None
 
-    Done twice, to be safe across Dynamo versions: straight away, and
-    again once this run has fully finished (Dynamo's EvaluationCompleted
-    event), in case anything clears the flag at the end of the run.
+
+def flag_self_for_rerun():
+    """Make sure the next click of Run executes this node again.
+
+    Dynamo only re-runs a node when something about it changed. Two things
+    are done so that's always true after a run:
+      1. mark this Python node as modified (force execute), and
+      2. once the run has fully finished, flip the Boolean wired into IN[0]
+         (True <-> False). Its value is ignored by this script, but to
+         Dynamo it's a real input change - the same as you editing it -
+         so the node re-runs on the next click of Run.
 
     Only in Manual run mode, so Automatic mode never re-prompts on its own.
     Returns None on success, else a short reason."""
@@ -1221,14 +1237,20 @@ def flag_self_for_rerun():
     except Exception as ex:
         return "couldn't reach Dynamo (%s)" % ex
 
+    toggles = [b for b in (_input0_boolean(n) for n in nodes) if b is not None]
+
     def mark():
         for node in nodes:
             node.MarkNodeAsModified(True)
 
+    def flip():
+        for boolean in toggles:
+            boolean.Value = not boolean.Value
+
     try:
         mark()
-    except Exception as ex:
-        return "couldn't flag the node (%s)" % ex
+    except Exception:
+        pass
 
     done = []
 
@@ -1237,18 +1259,29 @@ def flag_self_for_rerun():
             return
         done.append(True)
         try:
-            mark()
+            workspace.EvaluationCompleted -= on_run_finished
         except Exception:
             pass
         try:
-            workspace.EvaluationCompleted -= on_run_finished
+            flip()
+        except Exception:
+            pass
+        try:
+            mark()
         except Exception:
             pass
 
     try:
         workspace.EvaluationCompleted += on_run_finished
     except Exception:
-        pass    # the immediate flag above still applies
+        # Can't wait for the end of the run: flip now instead.
+        try:
+            flip()
+        except Exception as ex:
+            return "couldn't flip the IN[0] Boolean (%s)" % ex
+    if not toggles:
+        return ("no Boolean wired into IN[0] to flip - wire a Boolean node "
+                "into IN[0]")
     return None
 
 
