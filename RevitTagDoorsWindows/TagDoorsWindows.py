@@ -69,7 +69,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-6"
+SCRIPT_VERSION = "2026-09-29 tag-7"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -90,10 +90,14 @@ DOOR_TAG_RULES = [
 ]
 
 # Tag orientation follows the host wall (PLAN VIEWS ONLY; elsewhere tags
-# stay horizontal): windows / doors in a wall running across the plan get
-# a VERTICAL tag, in a wall running up the plan a HORIZONTAL tag. Doors / windows whose name contains any of these words
-# are left with the normal horizontal tag.
-ORIENTATION_EXCLUDE = ["robe"]
+# stay horizontal):
+#   - WINDOWS, and doors whose name contains any of MATCH_WALL_DOORS: the
+#     tag runs the same way as the wall (horizontal wall -> horizontal
+#     tag, vertical wall -> vertical tag).
+#   - all other doors: the tag is square to the wall (horizontal wall ->
+#     vertical tag, vertical wall -> horizontal tag).
+# "slid" covers Sliding / Slider doors.
+MATCH_WALL_DOORS = ["slid", "robe", "opening"]
 
 
 # ----------------------------------------------------------------------------
@@ -266,15 +270,16 @@ def wall_direction(element):
         return None
 
 
-def tag_orientation(element, view):
-    """Vertical tag for a window / door in a wall running across the view
-    (horizontal), horizontal tag for one in a wall running up the view
-    (vertical). Plan views only: in elevations, sections etc. every tag
-    stays horizontal. Robe doors, and anything whose wall can't be read,
-    keep the normal horizontal tag."""
+def tag_orientation(element, view, kind):
+    """Tag orientation from the host wall, in plan views only (elsewhere
+    every tag stays horizontal):
+      - windows, and doors named like MATCH_WALL_DOORS (sliding, robe,
+        opening): tag MATCHES the wall - horizontal in a wall running
+        across the plan, vertical in a wall running up it;
+      - all other doors: tag is square to the wall - vertical in a wall
+        running across the plan, horizontal in a wall running up it.
+    Anything whose wall can't be read keeps a horizontal tag."""
     if not isinstance(view, ViewPlan):
-        return TagOrientation.Horizontal
-    if any(text in element_name(element) for text in ORIENTATION_EXCLUDE):
         return TagOrientation.Horizontal
     d = wall_direction(element)
     if d is None:
@@ -284,7 +289,13 @@ def tag_orientation(element, view):
         up = abs(d.DotProduct(view.UpDirection))
     except Exception:
         return TagOrientation.Horizontal
-    return TagOrientation.Vertical if across >= up \
+    wall_across = across >= up
+    matches_wall = kind == "window" or any(
+        text in element_name(element) for text in MATCH_WALL_DOORS)
+    if matches_wall:
+        return TagOrientation.Horizontal if wall_across \
+            else TagOrientation.Vertical
+    return TagOrientation.Vertical if wall_across \
         else TagOrientation.Horizontal
 
 
@@ -419,7 +430,7 @@ def tag_picked(view, add_leader, skip_tagged, report):
                 if tag_type_id is None:
                     missing_types.add("%s : %s" % (family, tag_type))
             try:
-                orientation = tag_orientation(element, view)
+                orientation = tag_orientation(element, view, kind)
                 tag = create_tag(element, view, add_leader, point,
                                  tag_type_id, orientation)
                 if orientation == TagOrientation.Vertical:
@@ -437,8 +448,8 @@ def tag_picked(view, add_leader, skip_tagged, report):
     report.append("Tagged %d door(s) and %d window(s)."
                   % (counts["door"], counts["window"]))
     if tags:
-        report.append("%d tag(s) vertical (in walls running across the "
-                      "view), %d horizontal." % (vertical, len(tags) - vertical))
+        report.append("%d tag(s) vertical, %d horizontal."
+                      % (vertical, len(tags) - vertical))
     if by_rule:
         report.append("Door tag types used: " + ", ".join(
             "%s x%d" % (name, n) for name, n in sorted(by_rule.items())))

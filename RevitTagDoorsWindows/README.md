@@ -57,21 +57,20 @@ Windows always get the default window tag.
 
 In **plan views** (floor, ceiling, structural and area plans):
 
-| Window / door is in a wall running... | Tag |
-|---|---|
-| **across** the view (horizontal) | **Vertical** |
-| **up** the view (vertical) | **Horizontal** |
-| at an angle | whichever of the two it's closer to |
+| Element | Wall runs **across** the plan | Wall runs **up** the plan |
+|---|---|---|
+| **Windows**, **sliding doors**, **Robe** doors, **Opening** doors: tag matches the wall | Horizontal tag | Vertical tag |
+| **All other doors** (e.g. hinged internal doors): tag is square to the wall | Vertical tag | Horizontal tag |
 
-- **Doors with `Robe` in their name are excluded.** They always get a
-  horizontal tag.
+- **Sliding doors** are doors with "slid" in their family or type name
+  (Sliding, Slider), e.g. *Robe Sliding Door*.
+- Angled walls use whichever axis they're closer to.
 - **In elevations, sections and other views, all tags stay horizontal.**
 - "Across" and "up" are measured against the plan view's own axes, so it
   works on rotated plans too.
-- To exclude more doors/windows, add words to `ORIENTATION_EXCLUDE` near
-  the top of the script, e.g. `["robe", "cavity slider"]`.
-- The report shows the split, e.g.
-  `7 tag(s) vertical (in walls running across the view), 5 horizontal.`
+- To change which doors match the wall, edit `MATCH_WALL_DOORS` near the
+  top of the script, e.g. `["slid", "robe", "opening", "cavity"]`.
+- The report shows the split, e.g. `7 tag(s) vertical, 5 horizontal.`
 
 ---
 
@@ -87,7 +86,7 @@ In **plan views** (floor, ceiling, structural and area plans):
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-6
+   Tag Doors & Windows script version 2026-09-29 tag-7
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.
