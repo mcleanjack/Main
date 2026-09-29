@@ -27,7 +27,8 @@
 #   IN[1]  Add leader (bool). Default False.
 #   IN[2]  Skip windows / doors already tagged in this view (bool).
 #          Default True.
-#   IN[3]  Isolate windows & doors while you pick (bool). Default True:
+#   IN[3]  Isolate windows & doors while you pick (bool). Default True.
+#          PLAN VIEWS ONLY (elevations / sections are left as they are):
 #          everything else in the view is temporarily hidden (Revit's
 #          Temporary Hide/Isolate) and comes back when the run finishes,
 #          or if you cancel. If the view already has a temporary
@@ -71,7 +72,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-11"
+SCRIPT_VERSION = "2026-09-29 tag-12"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -510,7 +511,8 @@ def main():
     report = ["Tag Doors & Windows script version %s" % SCRIPT_VERSION]
 
     isolated = False
-    if isolate:
+    # Plan views only: in elevations / sections you pick in the normal view.
+    if isolate and isinstance(view, ViewPlan):
         try:
             isolated = isolate_doors_windows(view)
             if not isolated:

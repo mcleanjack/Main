@@ -27,7 +27,7 @@ loaded as the default for the Doors / Windows category.
 |---|---|---|
 | `IN[1]` | **Boolean** | `True` = tags with a leader. Default `False`. |
 | `IN[2]` | **Boolean** | `True` (default) = skip windows/doors already tagged in this view. `False` = tag them again. |
-| `IN[3]` | **Boolean** | `True` (default) = hide everything except windows & doors while you pick (see below). `False` = pick in the normal view. |
+| `IN[3]` | **Boolean** | `True` (default) = hide everything except windows & doors while you pick, **in plan views** (see below). `False` = pick in the normal view. |
 
 ### Door tag types by door name
 
@@ -109,8 +109,10 @@ door leaf**, like the `820` tag on a robe door.
 ## 2. Using it
 
 1. Click **Run** (or run the `.dyn` from **Manage → Dynamo Player**).
-2. The view switches to **windows and doors only**: everything else is
-   temporarily hidden, with the cyan *Temporary Hide/Isolate* border.
+2. In a **plan view**, the view switches to **windows and doors only**:
+   everything else is temporarily hidden, with the cyan *Temporary
+   Hide/Isolate* border. In elevations and sections, the view is left as
+   it is.
    In Revit, **click each window and door** you want to tag. Selected ones
    highlight as you go. Click one again to deselect it.
 3. Press **Enter** (or click **Finish** on the Options Bar). **Esc**
@@ -118,14 +120,14 @@ door leaf**, like the `820` tag on a robe door.
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-10
+   Tag Doors & Windows script version 2026-09-29 tag-12
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.
    ```
 
 Details:
-- **Only windows & doors shown while picking:** this uses Revit's
+- **Only windows & doors shown while picking (plan views only):** this uses Revit's
   **Temporary Hide/Isolate**, the same as *sunglasses icon → Isolate
   Category*. It's reset automatically when you press Enter, when you press
   Esc, and even if something goes wrong. No view settings, templates or
