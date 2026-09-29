@@ -69,7 +69,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-7"
+SCRIPT_VERSION = "2026-09-29 tag-8"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -77,17 +77,29 @@ TAG_CATEGORIES = {
 }
 
 # Door tag rules: if the door's family or type name contains the text
-# (not case-sensitive), it gets that tag family : type. Checked top to
-# bottom and the first match wins, so put the most specific first (e.g.
-# "Robe" before "Internal", so "Internal Robe..." gets the Robe tag).
-# Doors matching no rule get the default door tag (Tag By Category).
-# Edit / add rows here to suit your tags.
+# (not case-sensitive), it gets the tag(s) listed. Checked top to bottom
+# and the first match wins, so put the most specific first (e.g. "Entry"
+# and "Robe" before "Internal"). Doors matching no rule get the default
+# door tag (Tag By Category). Edit / add rows here to suit your tags.
+#
+# Each tag is (tag family, tag type, orientation, offset in mm):
+#   orientation  None     = the usual rule (see MATCH_WALL_DOORS below)
+#                "along"  = tag runs the same way as the wall
+#                "across" = tag is square to the wall
+#                (plan views only; elsewhere tags are horizontal)
+#   offset       moves the tag this far out from the door, towards the
+#                side it faces, so two tags don't sit on top of each other
 DOOR_TAG_RULES = [
-    # (text in door name, tag family,       tag type)
-    ("Robe",              "GH-AN-Tag_Door", "Robe Door"),
-    ("Opening",           "GH-AN-Tag_Door", "Bulkhead Height"),
-    ("Internal",          "GH-AN-Tag_Door", "Internal"),
+    ("Entry", [
+        ("GH-AN-Tag_Door", "Door Mark (H x W, Construction Type)",
+         "along", 600),
+        ("GH-AN-Tag_Door", "Internal", "across", 0),
+    ]),
+    ("Robe",     [("GH-AN-Tag_Door", "Robe Door", None, 0)]),
+    ("Opening",  [("GH-AN-Tag_Door", "Bulkhead Height", None, 0)]),
+    ("Internal", [("GH-AN-Tag_Door", "Internal", None, 0)]),
 ]
+MM = 1.0 / 304.8     # feet per mm
 
 # Tag orientation follows the host wall (PLAN VIEWS ONLY; elsewhere tags
 # stay horizontal):
@@ -239,9 +251,9 @@ def door_rule(door):
         name = (symbol.FamilyName + " " + symbol_name(symbol)).lower()
     except Exception:
         name = (getattr(door, "Name", "") or "").lower()
-    for text, family, tag_type in DOOR_TAG_RULES:
+    for text, specs in DOOR_TAG_RULES:
         if text.lower() in name:
-            return text, family, tag_type
+            return text, specs
     return None
 
 
@@ -270,7 +282,7 @@ def wall_direction(element):
         return None
 
 
-def tag_orientation(element, view, kind):
+def tag_orientation(element, view, kind, mode=None):
     """Tag orientation from the host wall, in plan views only (elsewhere
     every tag stays horizontal):
       - windows, and doors named like MATCH_WALL_DOORS (sliding, robe,
@@ -278,6 +290,7 @@ def tag_orientation(element, view, kind):
         across the plan, vertical in a wall running up it;
       - all other doors: tag is square to the wall - vertical in a wall
         running across the plan, horizontal in a wall running up it.
+    mode "along" / "across" (from DOOR_TAG_RULES) overrides that choice.
     Anything whose wall can't be read keeps a horizontal tag."""
     if not isinstance(view, ViewPlan):
         return TagOrientation.Horizontal
@@ -290,13 +303,30 @@ def tag_orientation(element, view, kind):
     except Exception:
         return TagOrientation.Horizontal
     wall_across = across >= up
-    matches_wall = kind == "window" or any(
-        text in element_name(element) for text in MATCH_WALL_DOORS)
+    if mode == "along":
+        matches_wall = True
+    elif mode == "across":
+        matches_wall = False
+    else:
+        matches_wall = kind == "window" or any(
+            text in element_name(element) for text in MATCH_WALL_DOORS)
     if matches_wall:
         return TagOrientation.Horizontal if wall_across \
             else TagOrientation.Vertical
     return TagOrientation.Vertical if wall_across \
         else TagOrientation.Horizontal
+
+
+def offset_point(element, point, offset_mm):
+    """point moved offset_mm towards the side the door / window faces."""
+    if not offset_mm:
+        return point
+    try:
+        f = element.FacingOrientation
+        return XYZ(point.X + f.X * offset_mm * MM,
+                   point.Y + f.Y * offset_mm * MM, point.Z)
+    except Exception:
+        return point
 
 
 def create_tag(element, view, add_leader, point, tag_type_id, orientation):
@@ -421,27 +451,35 @@ def tag_picked(view, add_leader, skip_tagged, report):
             if point is None:
                 failed.append("%s %s: no location" % (kind, element.Id))
                 continue
-            tag_type_id = None
             rule = door_rule(element) if kind == "door" else None
-            if rule is not None:
-                _, family, tag_type = rule
-                tag_type_id = tag_types.get((family.lower(),
-                                             tag_type.lower()))
-                if tag_type_id is None:
-                    missing_types.add("%s : %s" % (family, tag_type))
-            try:
-                orientation = tag_orientation(element, view, kind)
-                tag = create_tag(element, view, add_leader, point,
-                                 tag_type_id, orientation)
-                if orientation == TagOrientation.Vertical:
-                    vertical += 1
-                if tag_type_id is not None:
-                    by_rule[rule[2]] = by_rule.get(rule[2], 0) + 1
-                tags.append(tag)
+            # No rule: one default tag (Tag By Category), usual orientation.
+            specs = rule[1] if rule is not None else [(None, None, None, 0)]
+            made = 0
+            for i, (family, tag_type, mode, offset_mm) in enumerate(specs):
+                tag_type_id = None
+                if family:
+                    tag_type_id = tag_types.get((family.lower(),
+                                                 tag_type.lower()))
+                    if tag_type_id is None:
+                        missing_types.add("%s : %s" % (family, tag_type))
+                        if i > 0:
+                            continue    # don't add a 2nd default tag
+                try:
+                    orientation = tag_orientation(element, view, kind, mode)
+                    tag = create_tag(element, view, add_leader,
+                                     offset_point(element, point, offset_mm),
+                                     tag_type_id, orientation)
+                    if orientation == TagOrientation.Vertical:
+                        vertical += 1
+                    if tag_type_id is not None:
+                        by_rule[tag_type] = by_rule.get(tag_type, 0) + 1
+                    tags.append(tag)
+                    made += 1
+                except Exception as ex:
+                    failed.append("%s %s: %s" % (kind, element.Id, ex))
+            if made:
                 counts[kind] += 1
                 already.add(key)
-            except Exception as ex:
-                failed.append("%s %s: %s" % (kind, element.Id, ex))
     finally:
         TransactionManager.Instance.TransactionTaskDone()
 

@@ -31,11 +31,12 @@ loaded as the default for the Doors / Windows category.
 
 ### Door tag types by door name
 
-Doors get a specific tag type depending on their **family or type name**
+Doors get specific tag types depending on their **family or type name**
 (not case-sensitive). The first match wins:
 
-| Door name contains | Tag family : type | e.g. |
+| Door name contains | Tag(s) | e.g. |
 |---|---|---|
+| `Entry` | **two tags**: GH-AN-Tag_Door : **Door Mark (H x W, Construction Type)**, running along the wall and offset 600 mm to the door's facing side; plus GH-AN-Tag_Door : **Internal**, square to the wall, at the door | Entry Door ... |
 | `Robe` | GH-AN-Tag_Door : **Robe Door** | Robe Sliding Door : Smart - 2100H 2 x 520 |
 | `Opening` | GH-AN-Tag_Door : **Bulkhead Height** | Door - Opening : Opening - 2200H |
 | `Internal` | GH-AN-Tag_Door : **Internal** | Internal Timber Flush Door_Single : 2040 x 870 |
@@ -43,15 +44,22 @@ Doors get a specific tag type depending on their **family or type name**
 
 Windows always get the default window tag.
 
-- **Robe is checked first**, so a door named e.g. "Internal Robe…" gets the
-  Robe tag.
-- **To change the rules**, edit the `DOOR_TAG_RULES` list near the top of
-  the script. Each row is `("text in door name", "tag family", "tag
-  type")`.
-- **If a tag type isn't loaded**, those doors get the default door tag, and
+- **Entry and Robe are checked before Internal**, so e.g. "Internal Robe…"
+  gets the Robe tag.
+- **Entry doors' two tags:** in a wall running across the plan, Door Mark
+  is horizontal and Internal is vertical (90°). In a wall running up the
+  plan it's the other way round. The Door Mark tag is moved 600 mm off the
+  door so the two don't overlap; drag it wherever suits.
+- **To change the rules**, edit `DOOR_TAG_RULES` near the top of the
+  script. Each row is `("text in door name", [tags])`, and each tag is
+  `("tag family", "tag type", orientation, offset mm)`. Orientation is
+  `None` (usual rule), `"along"` (runs with the wall) or `"across"`
+  (square to the wall).
+- **If a tag type isn't loaded:** if it's a door's first tag, the default
+  door tag is used instead. If it's the second, it's skipped. Either way
   the report lists the missing type.
 - The report shows which types were used, e.g.
-  `Door tag types used: Bulkhead Height x2, Internal x5, Robe Door x3`.
+  `Door tag types used: Door Mark (H x W, Construction Type) x2, Internal x5, Robe Door x3`.
 
 ### Tag orientation follows the wall (plan views only)
 
@@ -86,7 +94,7 @@ In **plan views** (floor, ceiling, structural and area plans):
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-7
+   Tag Doors & Windows script version 2026-09-29 tag-8
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.
