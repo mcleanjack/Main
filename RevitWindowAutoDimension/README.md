@@ -1,0 +1,102 @@
+# Revit Window Auto-Dimension
+
+A Dynamo tool for Revit that dimensions between windows in plan views. Click
+the windows in a wall and it places one continuous dimension string outside
+the wall:
+
+```
+outer face of perpendicular wall ─ jamb ─ jamb ─ jamb ─ jamb ─ outer face of perpendicular wall
+      (e.g. 950)                   (1610)             (1550)
+```
+
+The string ends on the **outer face of the walls that run perpendicular to
+the wall hosting the windows**. For end walls this is the external corner of
+the building.
+
+Contents of this folder:
+
+- `WindowAutoDimension.dyn`: a ready-to-open Dynamo graph (Python node plus
+  its inputs, set to **Manual** run).
+- `WindowAutoDimension.py`: the same script as plain text, if you'd rather
+  paste it into your own Python Script node.
+- `README.md`: this file.
+
+No third-party Dynamo packages are required.
+
+---
+
+## 1. Using it
+
+1. Open a **floor plan** view in Revit.
+2. Open `WindowAutoDimension.dyn` in Dynamo (Manage/Automate → Dynamo →
+   Open), or run it from **Dynamo Player**.
+3. Set the inputs if needed:
+   - **Run**: `True`.
+   - **Offset from wall (mm)**: the distance from the wall's exterior face to
+     the dimension line, in model millimetres. The default is `1000`.
+   - **Dimension Type**: the exact name of a linear dimension type, for
+     example `Arrow - 2.5mm Arial`. Leave it blank to use the project default.
+4. Click **Run**. Revit asks you to pick elements:
+   - Click each window you want dimensioned. Doors are accepted too.
+   - Press **Finish** on the Options Bar, or press Enter. Esc cancels.
+5. One dimension string is created per host wall. The **Result** Watch node
+   lists the new dimensions and a short report.
+
+The graph is set to **Manual**, so each click of Run starts a new pick
+session. Press Ctrl+Z in Revit to undo a run.
+
+You can pick windows in several different walls at once. Each wall gets its
+own string.
+
+---
+
+## 2. What it snaps to
+
+| Part of the string | Reference used |
+|---|---|
+| Window sides | The **jamb faces of the opening cut in the host wall**, i.e. the masonry/rough opening. These are real wall faces, so the dimensions stay attached and update when windows move or resize. |
+| Start / end | The **outer face** (the face pointing away from the windows) of the nearest perpendicular wall beyond the first and last picked window. |
+| Fallback end | If no perpendicular wall is found on a side, the host wall's own end face is used. |
+| Fallback window | If a window family doesn't cut the wall, its centre (Left/Right centre) reference is used and a note is added to the report. |
+
+How the perpendicular wall is chosen:
+
+- It must be visible in the current view, straight, and within about 1° of
+  perpendicular to the host wall.
+- It must touch the host wall, on either the interior or exterior side.
+- Of those walls, the one **closest to the outermost picked window** on each
+  side is used. In your plan, picking both BED 3 and BED 2 windows ends the
+  string on the top and bottom external walls (the green walls in your
+  sketch). The internal BED 3/BED 2 partition sits between the windows, so
+  it is ignored. If you pick only the BED 2 window, the string ends on that
+  partition instead, since it is the nearest perpendicular wall above the
+  window.
+
+The dimension line is placed parallel to the host wall on its **exterior**
+side, as set by the wall's orientation. If a string lands on the inside, the
+wall is flipped: select it and use the flip arrows, then re-run.
+
+---
+
+## 3. Limitations
+
+- Straight host walls only; curved walls are skipped and reported.
+- Windows in curtain walls aren't hosted in a basic wall and are skipped.
+- Walls in linked models are not used as end walls.
+- For walls with several jamb faces (e.g. cavity walls with returns), the
+  innermost/tightest opening faces are used.
+
+---
+
+## 4. Building the graph manually (instead of opening the .dyn)
+
+1. In a blank Dynamo graph, add a **Boolean** node (Run), a **Number** node
+   (Offset, `1000`), and a **String** node (Dimension Type, blank).
+2. Add a **Python Script** node. Click **+** twice so it has `IN[0]`, `IN[1]`,
+   `IN[2]`, then paste in the contents of `WindowAutoDimension.py`.
+3. Wire Run → `IN[0]`, Offset → `IN[1]`, and Dimension Type → `IN[2]`. Add a
+   **Watch** node on the output.
+4. Set the graph's run mode to **Manual** (bottom-left of the Dynamo window).
+
+The script targets the **CPython3** engine, the default in Dynamo 2.13+ and
+Revit 2022+. It also runs under IronPython2.
