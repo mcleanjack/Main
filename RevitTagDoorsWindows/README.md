@@ -42,7 +42,23 @@ Doors get specific tag types depending on their **family or type name**
 | `Internal` | GH-AN-Tag_Door : **Internal** | Internal Timber Flush Door_Single : 2040 x 870 |
 | anything else | the default door tag (Tag By Category) | |
 
-Windows always get the default window tag.
+**Windows** get their tag type from the view:
+
+| View | Window tag |
+|---|---|
+| Plan views | GH-AN-Tag_Window : the **plan** type (the family's type that isn't *Elevations*) |
+| Elevations, sections | GH-AN-Tag_Window : **Elevations** |
+
+- This doesn't depend on the project's default window tag, so changing
+  the default (e.g. to *Elevations*) no longer affects plan tags.
+- **Fixing plan tags that came out as Elevations:** in the plan view, run
+  it and click those windows. Their existing *Elevations* tags are switched
+  back to the plan type (the report counts them).
+- To fix the plan type by name, set `WINDOW_TAG_PLAN_TYPE = "Your Type"`
+  near the top of the script. The report shows which type was used, e.g.
+  `Windows tagged as GH-AN-Tag_Window : Window Mark.`
+- If the type isn't loaded, windows get the project's default window tag
+  and the report says so.
 
 - **Entry and Robe are checked before Internal**, so e.g. "Internal Robe…"
   gets the Robe tag.
@@ -120,7 +136,7 @@ door leaf**, like the `820` tag on a robe door.
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-12
+   Tag Doors & Windows script version 2026-09-29 tag-13
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.

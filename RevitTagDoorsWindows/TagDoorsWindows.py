@@ -72,7 +72,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-12"
+SCRIPT_VERSION = "2026-09-29 tag-13"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -120,6 +120,18 @@ MATCH_WALL_DOORS = ["slid", "robe", "opening"]
 # own geometry, so it follows the actual swing / hand / facing.
 STORAGE_PARAM = "For Storage"
 
+# Window tags are chosen by view, rather than taking the project's default
+# window tag:
+#   plan views            -> WINDOW_TAG_FAMILY : WINDOW_TAG_PLAN_TYPE
+#   elevations / sections -> WINDOW_TAG_FAMILY : WINDOW_TAG_ELEVATION_TYPE
+# WINDOW_TAG_PLAN_TYPE = None uses the family's other type (the first one
+# alphabetically that isn't the elevation type); put the exact type name
+# in quotes to fix it. In a plan view, clicking a window whose existing
+# tag is the elevation type switches that tag back to the plan type.
+WINDOW_TAG_FAMILY = "GH-AN-Tag_Window"
+WINDOW_TAG_ELEVATION_TYPE = "Elevations"
+WINDOW_TAG_PLAN_TYPE = None
+
 
 # ----------------------------------------------------------------------------
 # Inputs
@@ -156,21 +168,50 @@ def eid_int(element_id):
         return int(element_id.IntegerValue)     # older Revit
 
 
-def tagged_ids_in_view(view):
-    """Ids (as ints) of elements that already have a tag in this view."""
-    ids = set()
+def tags_in_view(view):
+    """{element id (int): [its tags]} for elements already tagged in this
+    view."""
+    out = {}
     for tag in FilteredElementCollector(doc, view.Id).OfClass(IndependentTag):
         try:
-            for eid in tag.GetTaggedLocalElementIds():      # Revit 2022+
-                ids.add(eid_int(eid))
-        except AttributeError:
+            ids = [eid_int(e) for e in tag.GetTaggedLocalElementIds()]
+        except AttributeError:                              # older Revit
             try:
-                ids.add(eid_int(tag.TaggedLocalElementId))  # older Revit
+                ids = [eid_int(tag.TaggedLocalElementId)]
             except Exception:
-                pass
+                ids = []
         except Exception:
-            pass
-    return ids
+            ids = []
+        for i in ids:
+            out.setdefault(i, []).append(tag)
+    return out
+
+
+def window_tag_type_ids(view):
+    """(tag type id to use for windows in this view or None, plan type id,
+    elevation type id, plan type name)."""
+    types = {}
+    for sym in (FilteredElementCollector(doc)
+                .OfCategory(BuiltInCategory.OST_WindowTags)
+                .OfClass(FamilySymbol)):
+        try:
+            if sym.FamilyName.strip().lower() == \
+                    WINDOW_TAG_FAMILY.strip().lower():
+                types[symbol_name(sym)] = sym.Id
+        except Exception:
+            continue
+    by_lower = dict((k.lower(), (k, v)) for k, v in types.items())
+    elev = by_lower.get(WINDOW_TAG_ELEVATION_TYPE.lower())
+    if WINDOW_TAG_PLAN_TYPE:
+        plan = by_lower.get(WINDOW_TAG_PLAN_TYPE.lower())
+    else:
+        others = sorted(k for k in types
+                        if k.lower() != WINDOW_TAG_ELEVATION_TYPE.lower())
+        plan = (others[0], types[others[0]]) if others else None
+    plan_id = plan[1] if plan else None
+    elev_id = elev[1] if elev else None
+    use = plan_id if isinstance(view, ViewPlan) else elev_id
+    return use, plan_id, elev_id, (plan[0] if plan else None)
 
 
 def tag_point(element, view):
@@ -443,6 +484,10 @@ def rotate_tag(tag, angle):
     tag.RotationAngle = angle
 
 
+def kind_count_windows(counts):
+    return counts.get("window", 0)
+
+
 def offset_point(element, point, offset_mm):
     """point moved offset_mm towards the side the door / window faces."""
     if not offset_mm:
@@ -545,7 +590,11 @@ def tag_picked(view, add_leader, skip_tagged, report):
         return [], "\n".join(report + ["Cancelled. Nothing tagged."])
 
     cats = category_ids()
-    already = tagged_ids_in_view(view) if skip_tagged else set()
+    existing = tags_in_view(view)
+    already = set(existing) if skip_tagged else set()
+    window_type_id, window_plan_id, window_elev_id, window_plan_name = \
+        window_tag_type_ids(view)
+    switched_back = 0
     counts = {"door": 0, "window": 0}
     tag_types = door_tag_types()
     by_rule = {}            # "Robe Door" -> count
@@ -577,6 +626,19 @@ def tag_picked(view, add_leader, skip_tagged, report):
             seen.add(key)
             if key in already:
                 skipped_tagged += 1
+                # Plan view: a window tagged with the elevation tag type
+                # gets its tag switched back to the plan type.
+                if kind == "window" and isinstance(view, ViewPlan) \
+                        and window_plan_id is not None \
+                        and window_elev_id is not None:
+                    for old in existing.get(key, []):
+                        try:
+                            if eid_int(old.GetTypeId()) == \
+                                    eid_int(window_elev_id):
+                                old.ChangeTypeId(window_plan_id)
+                                switched_back += 1
+                        except Exception as ex:
+                            failed.append("window %s: %s" % (element.Id, ex))
                 continue
             point = tag_point(element, view)
             if point is None:
@@ -593,6 +655,8 @@ def tag_picked(view, add_leader, skip_tagged, report):
             made = 0
             for i, (family, tag_type, mode, offset_mm) in enumerate(specs):
                 tag_type_id = None
+                if kind == "window":
+                    tag_type_id = window_type_id     # plan / elevation type
                 if family:
                     tag_type_id = tag_types.get((family.lower(),
                                                  tag_type.lower()))
@@ -617,7 +681,7 @@ def tag_picked(view, add_leader, skip_tagged, report):
                             rotate_failed.append("%s (%s)" % (element.Id, ex))
                     elif orientation == TagOrientation.Vertical:
                         vertical += 1
-                    if tag_type_id is not None:
+                    if family and tag_type_id is not None:
                         by_rule[tag_type] = by_rule.get(tag_type, 0) + 1
                     tags.append(tag)
                     made += 1
@@ -634,6 +698,20 @@ def tag_picked(view, add_leader, skip_tagged, report):
     if tags:
         report.append("%d tag(s) vertical, %d horizontal."
                       % (vertical, len(tags) - vertical))
+    if kind_count_windows(counts) and window_type_id is None:
+        report.append("Window tag type %s : %s not loaded; windows got the "
+                      "project's default window tag."
+                      % (WINDOW_TAG_FAMILY, window_plan_name or "(plan type)"
+                         if isinstance(view, ViewPlan)
+                         else WINDOW_TAG_ELEVATION_TYPE))
+    elif kind_count_windows(counts):
+        report.append("Windows tagged as %s : %s." % (
+            WINDOW_TAG_FAMILY, window_plan_name if isinstance(view, ViewPlan)
+            else WINDOW_TAG_ELEVATION_TYPE))
+    if switched_back:
+        report.append("%d existing window tag(s) switched from %s back to "
+                      "%s." % (switched_back, WINDOW_TAG_ELEVATION_TYPE,
+                               window_plan_name))
     if rotated:
         report.append("%d tag(s) rotated to the door leaf (For Storage "
                       "doors)." % rotated)
