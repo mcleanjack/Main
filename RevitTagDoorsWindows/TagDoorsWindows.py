@@ -53,7 +53,7 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, IndependentTag, Reference, TagMode,
     TagOrientation, LocationPoint, BuiltInCategory, ViewType, XYZ,
     ElementId, TemporaryViewMode, FamilySymbol, BuiltInParameter, ViewPlan,
-    Options, ViewDetailLevel, Solid, GeometryInstance, PlanarFace
+    Options, ViewDetailLevel, Solid, GeometryInstance, PlanarFace, Line
 )
 from System.Collections.Generic import List as NetList
 from Autodesk.Revit.UI.Selection import ObjectType
@@ -71,7 +71,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-9"
+SCRIPT_VERSION = "2026-09-29 tag-10"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -334,24 +334,56 @@ def is_for_storage(door):
         return False
 
 
-def _solids(geometry):
-    """All solids in a geometry element, including inside family
-    instances (in model coordinates)."""
+def _geometry_objects(geometry):
+    """Every geometry object in a geometry element, including inside
+    family instances (in model coordinates)."""
     for obj in geometry:
-        if isinstance(obj, Solid):
-            yield obj
-        elif isinstance(obj, GeometryInstance):
-            for inner in _solids(obj.GetInstanceGeometry()):
+        if isinstance(obj, GeometryInstance):
+            for inner in _geometry_objects(obj.GetInstanceGeometry()):
                 yield inner
+        else:
+            yield obj
 
 
-def leaf_angle(door, view):
-    """Angle (radians, in the view, between -90 and +90 deg so text reads
-    upright) of the open door leaf: the largest vertical flat face that is
-    neither along nor square to the wall. None if not found."""
-    wall = wall_direction(door)
-    if wall is None:
+def _is_angled(dx, dy, wall):
+    """True if direction (dx, dy) is neither along nor square to the wall
+    (more than 3 degrees off both)."""
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return False
+    c = abs(dx * wall.X + dy * wall.Y) / length
+    return math.sin(math.radians(3)) < c < math.cos(math.radians(3))
+
+
+def _leaf_from_plan_lines(door, view, wall):
+    """Leaf direction from the door's plan linework in this view: the
+    longest straight line at an angle to the wall. Door families usually
+    draw the open leaf this way in plan (while the 3D panel stays shut)."""
+    opt = Options()
+    opt.View = view
+    try:
+        geometry = door.get_Geometry(opt)
+    except Exception:
         return None
+    if geometry is None:
+        return None
+    best, best_len = None, 0.0
+    for obj in _geometry_objects(geometry):
+        if not isinstance(obj, Line):
+            continue
+        a, b = obj.GetEndPoint(0), obj.GetEndPoint(1)
+        dx, dy = b.X - a.X, b.Y - a.Y
+        if not _is_angled(dx, dy, wall):
+            continue
+        length = math.hypot(dx, dy)
+        if length > best_len:
+            best, best_len = (dx, dy), length
+    return best
+
+
+def _leaf_from_3d(door, wall):
+    """Leaf direction from the door's 3D geometry: the largest vertical
+    flat face at an angle to the wall (runs square to that face's normal)."""
     opt = Options()
     opt.DetailLevel = ViewDetailLevel.Fine
     try:
@@ -360,9 +392,10 @@ def leaf_angle(door, view):
         return None
     if geometry is None:
         return None
-    lo, hi = math.sin(math.radians(3)), math.cos(math.radians(3))
     best, best_area = None, 0.0
-    for solid in _solids(geometry):
+    for solid in _geometry_objects(geometry):
+        if not isinstance(solid, Solid):
+            continue
         try:
             faces = list(solid.Faces)
         except Exception:
@@ -373,16 +406,24 @@ def leaf_angle(door, view):
             n = face.FaceNormal
             if abs(n.Z) > 0.01:
                 continue                    # top / bottom face
-            length = math.hypot(n.X, n.Y)
-            c = abs(n.X * wall.X + n.Y * wall.Y) / length
-            if c < lo or c > hi:
-                continue                    # along or square to the wall
+            if not _is_angled(n.X, n.Y, wall):
+                continue
             if face.Area > best_area:
-                best, best_area = n, face.Area
-    if best is None:
+                best, best_area = (-n.Y, n.X), face.Area
+    return best
+
+
+def leaf_angle(door, view):
+    """Angle (radians, in the view, between -90 and +90 deg so text reads
+    upright) of the open door leaf, from the door's plan linework in this
+    view, else its 3D panel. None if no angled leaf is found."""
+    wall = wall_direction(door)
+    if wall is None:
         return None
-    # The leaf runs at right angles to its face normal.
-    leaf = XYZ(-best.Y, best.X, 0.0)
+    leaf = _leaf_from_plan_lines(door, view, wall) or _leaf_from_3d(door, wall)
+    if leaf is None:
+        return None
+    leaf = XYZ(leaf[0], leaf[1], 0.0)
     try:
         angle = math.atan2(leaf.DotProduct(view.UpDirection),
                            leaf.DotProduct(view.RightDirection))
@@ -595,8 +636,9 @@ def tag_picked(view, add_leader, skip_tagged, report):
         report.append("%d tag(s) rotated to the door leaf (For Storage "
                       "doors)." % rotated)
     if storage_no_leaf:
-        report.append("For Storage door(s) with no angled leaf found, "
-                      "tagged normally: " + ", ".join(storage_no_leaf))
+        report.append("For Storage door(s) with no angled leaf found in "
+                      "their plan lines or 3D panel, tagged normally: "
+                      + ", ".join(storage_no_leaf))
     if rotate_failed:
         report.append("Couldn't rotate tag(s) - free tag rotation needs "
                       "Revit 2023 or later: " + "; ".join(rotate_failed))

@@ -86,8 +86,11 @@ For doors with the **For Storage** parameter ticked (e.g. storage doors
 drawn part-open at 30°), each tag is **rotated to line up with the open
 door leaf**, like the `820` tag on a robe door.
 
-- The leaf angle is **measured from the door's own geometry**: the
-  largest flat panel face at an angle to the wall. It's correct whichever
+- The leaf angle is **measured from the door itself**. It first reads the
+  door's **plan linework in the current view** (the longest straight
+  line at an angle to the wall, i.e. the drawn leaf). Door families
+  usually draw the open leaf this way while the 3D panel stays shut. If
+  that finds nothing, it falls back to the 3D panel. It's correct whichever
   way the door is flipped or handed, and still correct if the swing angle
   changes.
 - The angle is kept between −90° and +90°, so the text never reads upside
@@ -115,7 +118,7 @@ door leaf**, like the `820` tag on a robe door.
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-9
+   Tag Doors & Windows script version 2026-09-29 tag-10
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.
