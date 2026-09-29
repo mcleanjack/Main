@@ -27,6 +27,11 @@
 #   IN[1]  Add leader (bool). Default False.
 #   IN[2]  Skip windows / doors already tagged in this view (bool).
 #          Default True.
+#   IN[3]  Isolate windows & doors while you pick (bool). Default True:
+#          everything else in the view is temporarily hidden (Revit's
+#          Temporary Hide/Isolate) and comes back when the run finishes,
+#          or if you cancel. If the view already has a temporary
+#          hide/isolate on, it's left as it is.
 #
 # Re-running: in Manual run mode the script flags its own node after each
 # run, so every click of Run executes it again (see flag_self_for_rerun).
@@ -45,8 +50,10 @@ clr.AddReference('RevitServices')
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, IndependentTag, Reference, TagMode,
-    TagOrientation, LocationPoint, BuiltInCategory, ViewType, XYZ
+    TagOrientation, LocationPoint, BuiltInCategory, ViewType, XYZ,
+    ElementId, TemporaryViewMode
 )
+from System.Collections.Generic import List as NetList
 from Autodesk.Revit.UI.Selection import ObjectType
 from Autodesk.Revit.Exceptions import OperationCanceledException
 
@@ -62,7 +69,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-2"
+SCRIPT_VERSION = "2026-09-29 tag-3"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -135,6 +142,43 @@ def tag_point(element, view):
     return None
 
 
+def isolate_doors_windows(view):
+    """Temporarily isolate the Doors and Windows categories in the view,
+    committed straight away so it shows while you pick. Returns True if
+    applied (so it must be reset afterwards), False if skipped."""
+    try:
+        if view.IsTemporaryHideIsolateActive():
+            return False    # the user's own temporary hide/isolate: keep it
+    except Exception:
+        pass
+    ids = NetList[ElementId]()
+    for bic in TAG_CATEGORIES:
+        try:
+            ids.Add(doc.Settings.Categories.get_Item(bic).Id)
+        except Exception:
+            pass
+    if ids.Count == 0:
+        return False
+    TransactionManager.Instance.EnsureInTransaction(doc)
+    view.IsolateCategoriesTemporary(ids)
+    TransactionManager.Instance.ForceCloseTransaction()
+    uidoc.RefreshActiveView()
+    return True
+
+
+def reset_isolate(view):
+    """Bring back everything hidden by isolate_doors_windows."""
+    TransactionManager.Instance.EnsureInTransaction(doc)
+    try:
+        view.DisableTemporaryViewMode(TemporaryViewMode.TemporaryHideIsolate)
+    finally:
+        TransactionManager.Instance.ForceCloseTransaction()
+    try:
+        uidoc.RefreshActiveView()
+    except Exception:
+        pass
+
+
 def pick_elements():
     """Click windows / doors, then Enter or Finish. None if cancelled."""
     try:
@@ -161,8 +205,38 @@ def main():
 
     add_leader = bool(_in(1, False))
     skip_tagged = bool(_in(2, True))
+    isolate = bool(_in(3, True))
     report = ["Tag Doors & Windows script version %s" % SCRIPT_VERSION]
 
+    isolated = False
+    if isolate:
+        try:
+            isolated = isolate_doors_windows(view)
+            if not isolated:
+                report.append("View already had a temporary hide/isolate "
+                              "on, so it was left as it is.")
+        except Exception as ex:
+            report.append("Couldn't isolate windows & doors (%s); picking "
+                          "in the normal view." % ex)
+    reset_problem = None
+    try:
+        tags, text = tag_picked(view, add_leader, skip_tagged, report)
+    finally:
+        # Always bring everything back, even on cancel or an error.
+        if isolated:
+            try:
+                reset_isolate(view)
+            except Exception as ex:
+                reset_problem = ex
+    if reset_problem is not None:
+        text += ("\nCouldn't reset the temporary isolate (%s). Use the "
+                 "sunglasses icon > Reset Temporary Hide/Isolate."
+                 % reset_problem)
+    return tags, text
+
+
+def tag_picked(view, add_leader, skip_tagged, report):
+    """Pick windows / doors, tag them, return (tags, report text)."""
     picked = pick_elements()
     if picked is None:
         return [], "\n".join(report + ["Cancelled. Nothing tagged."])
