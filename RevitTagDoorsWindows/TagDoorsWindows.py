@@ -42,6 +42,7 @@
 # ============================================================================
 
 import clr
+import math
 import traceback
 
 clr.AddReference('RevitAPI')
@@ -51,7 +52,8 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import (
     FilteredElementCollector, IndependentTag, Reference, TagMode,
     TagOrientation, LocationPoint, BuiltInCategory, ViewType, XYZ,
-    ElementId, TemporaryViewMode, FamilySymbol, BuiltInParameter, ViewPlan
+    ElementId, TemporaryViewMode, FamilySymbol, BuiltInParameter, ViewPlan,
+    Options, ViewDetailLevel, Solid, GeometryInstance, PlanarFace
 )
 from System.Collections.Generic import List as NetList
 from Autodesk.Revit.UI.Selection import ObjectType
@@ -69,7 +71,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-8"
+SCRIPT_VERSION = "2026-09-29 tag-9"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -110,6 +112,12 @@ MM = 1.0 / 304.8     # feet per mm
 #     vertical tag, vertical wall -> horizontal tag).
 # "slid" covers Sliding / Slider doors.
 MATCH_WALL_DOORS = ["slid", "robe", "opening"]
+
+# Doors with this Yes/No instance parameter ticked (e.g. storage doors
+# shown part-open at 30 degrees) get their tag(s) rotated to line up with
+# the open door leaf, in plan views. The leaf angle is read from the door's
+# own geometry, so it follows the actual swing / hand / facing.
+STORAGE_PARAM = "For Storage"
 
 
 # ----------------------------------------------------------------------------
@@ -317,6 +325,82 @@ def tag_orientation(element, view, kind, mode=None):
         else TagOrientation.Horizontal
 
 
+def is_for_storage(door):
+    """True if the door's STORAGE_PARAM (Yes/No) is ticked."""
+    try:
+        p = door.LookupParameter(STORAGE_PARAM)
+        return p is not None and p.AsInteger() == 1
+    except Exception:
+        return False
+
+
+def _solids(geometry):
+    """All solids in a geometry element, including inside family
+    instances (in model coordinates)."""
+    for obj in geometry:
+        if isinstance(obj, Solid):
+            yield obj
+        elif isinstance(obj, GeometryInstance):
+            for inner in _solids(obj.GetInstanceGeometry()):
+                yield inner
+
+
+def leaf_angle(door, view):
+    """Angle (radians, in the view, between -90 and +90 deg so text reads
+    upright) of the open door leaf: the largest vertical flat face that is
+    neither along nor square to the wall. None if not found."""
+    wall = wall_direction(door)
+    if wall is None:
+        return None
+    opt = Options()
+    opt.DetailLevel = ViewDetailLevel.Fine
+    try:
+        geometry = door.get_Geometry(opt)
+    except Exception:
+        return None
+    if geometry is None:
+        return None
+    lo, hi = math.sin(math.radians(3)), math.cos(math.radians(3))
+    best, best_area = None, 0.0
+    for solid in _solids(geometry):
+        try:
+            faces = list(solid.Faces)
+        except Exception:
+            continue
+        for face in faces:
+            if not isinstance(face, PlanarFace):
+                continue
+            n = face.FaceNormal
+            if abs(n.Z) > 0.01:
+                continue                    # top / bottom face
+            length = math.hypot(n.X, n.Y)
+            c = abs(n.X * wall.X + n.Y * wall.Y) / length
+            if c < lo or c > hi:
+                continue                    # along or square to the wall
+            if face.Area > best_area:
+                best, best_area = n, face.Area
+    if best is None:
+        return None
+    # The leaf runs at right angles to its face normal.
+    leaf = XYZ(-best.Y, best.X, 0.0)
+    try:
+        angle = math.atan2(leaf.DotProduct(view.UpDirection),
+                           leaf.DotProduct(view.RightDirection))
+    except Exception:
+        return None
+    while angle > math.pi / 2:
+        angle -= math.pi
+    while angle <= -math.pi / 2:
+        angle += math.pi
+    return angle
+
+
+def rotate_tag(tag, angle):
+    """Free-rotate a tag to angle (radians). Revit 2023+ only."""
+    tag.TagOrientation = TagOrientation.AnyModelDirection
+    tag.RotationAngle = angle
+
+
 def offset_point(element, point, offset_mm):
     """point moved offset_mm towards the side the door / window faces."""
     if not offset_mm:
@@ -423,6 +507,10 @@ def tag_picked(view, add_leader, skip_tagged, report):
     tag_types = door_tag_types()
     by_rule = {}            # "Robe Door" -> count
     vertical = 0
+    rotated = 0
+    storage_angle = {}      # door id -> leaf angle (For Storage doors)
+    storage_no_leaf = []
+    rotate_failed = []
     missing_types = set()
     skipped_tagged = 0
     ignored = 0
@@ -452,6 +540,11 @@ def tag_picked(view, add_leader, skip_tagged, report):
                 failed.append("%s %s: no location" % (kind, element.Id))
                 continue
             rule = door_rule(element) if kind == "door" else None
+            if kind == "door" and isinstance(view, ViewPlan) \
+                    and is_for_storage(element):
+                storage_angle[key] = leaf_angle(element, view)
+                if storage_angle[key] is None:
+                    storage_no_leaf.append(str(element.Id))
             # No rule: one default tag (Tag By Category), usual orientation.
             specs = rule[1] if rule is not None else [(None, None, None, 0)]
             made = 0
@@ -466,10 +559,20 @@ def tag_picked(view, add_leader, skip_tagged, report):
                             continue    # don't add a 2nd default tag
                 try:
                     orientation = tag_orientation(element, view, kind, mode)
+                    angle = storage_angle.get(key, None) if kind == "door" \
+                        else None
+                    if angle is not None:
+                        orientation = TagOrientation.Horizontal
                     tag = create_tag(element, view, add_leader,
                                      offset_point(element, point, offset_mm),
                                      tag_type_id, orientation)
-                    if orientation == TagOrientation.Vertical:
+                    if angle is not None:
+                        try:
+                            rotate_tag(tag, angle)
+                            rotated += 1
+                        except Exception as ex:
+                            rotate_failed.append("%s (%s)" % (element.Id, ex))
+                    elif orientation == TagOrientation.Vertical:
                         vertical += 1
                     if tag_type_id is not None:
                         by_rule[tag_type] = by_rule.get(tag_type, 0) + 1
@@ -488,6 +591,15 @@ def tag_picked(view, add_leader, skip_tagged, report):
     if tags:
         report.append("%d tag(s) vertical, %d horizontal."
                       % (vertical, len(tags) - vertical))
+    if rotated:
+        report.append("%d tag(s) rotated to the door leaf (For Storage "
+                      "doors)." % rotated)
+    if storage_no_leaf:
+        report.append("For Storage door(s) with no angled leaf found, "
+                      "tagged normally: " + ", ".join(storage_no_leaf))
+    if rotate_failed:
+        report.append("Couldn't rotate tag(s) - free tag rotation needs "
+                      "Revit 2023 or later: " + "; ".join(rotate_failed))
     if by_rule:
         report.append("Door tag types used: " + ", ".join(
             "%s x%d" % (name, n) for name, n in sorted(by_rule.items())))

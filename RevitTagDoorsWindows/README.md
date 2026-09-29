@@ -80,6 +80,27 @@ In **plan views** (floor, ceiling, structural and area plans):
   top of the script, e.g. `["slid", "robe", "opening", "cavity"]`.
 - The report shows the split, e.g. `7 tag(s) vertical, 5 horizontal.`
 
+### "For Storage" doors: tag follows the door leaf (plan views only)
+
+For doors with the **For Storage** parameter ticked (e.g. storage doors
+drawn part-open at 30°), each tag is **rotated to line up with the open
+door leaf**, like the `820` tag on a robe door.
+
+- The leaf angle is **measured from the door's own geometry**: the
+  largest flat panel face at an angle to the wall. It's correct whichever
+  way the door is flipped or handed, and still correct if the swing angle
+  changes.
+- The angle is kept between −90° and +90°, so the text never reads upside
+  down.
+- It applies to all of that door's tags (e.g. both tags on an Entry
+  door) and overrides the horizontal/vertical rules below.
+- It needs **Revit 2023 or later** (free tag rotation). On older versions
+  the report says the tag couldn't be rotated.
+- If no angled leaf is found (e.g. the door is drawn closed), the door is
+  tagged normally and listed in the report.
+- The parameter name is `STORAGE_PARAM` near the top of the script, if
+  yours is named differently.
+
 ---
 
 ## 2. Using it
@@ -94,7 +115,7 @@ In **plan views** (floor, ceiling, structural and area plans):
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-8
+   Tag Doors & Windows script version 2026-09-29 tag-9
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.
