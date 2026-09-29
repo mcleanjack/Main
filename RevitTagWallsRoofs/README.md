@@ -19,8 +19,8 @@ every wall and roof in the view gets a material tag,
   material (brick, cladding, roof sheeting), not an inner layer.
 
 Skipped, and counted in the report:
-- walls/roofs **already tagged** in this view, so re-running only tags new
-  ones;
+- walls/roofs that already have a **material tag** in this view, so
+  re-running only tags new ones (other tags, e.g. keynotes, don't count);
 - walls seen **edge-on** or **facing away** (e.g. the back of the house);
 - **curtain walls**.
 
@@ -56,7 +56,7 @@ Skipped, and counted in the report:
 2. Click **Run** (or run the `.dyn` from **Manage → Dynamo Player**).
 3. The tags appear. The Watch node reports, e.g.:
    ```
-   Material Tag Walls & Roofs script version 2026-09-29 material-1
+   Material Tag Walls & Roofs script version 2026-09-29 material-2
    Tagged 8 wall(s) and 2 roof(s) with GH-AN-Tag_Material : Material Tag.
    Skipped 5 wall(s) and 0 roof(s) with no face towards this view (edge-on, facing away, or curtain walls).
    ```
@@ -68,6 +68,7 @@ Skipped, and counted in the report:
 
 | Symptom | Fix |
 |---|---|
+| Report says walls were tagged but none show | Material Tags are turned off in the view. The report warns about this. Turn on **Visibility/Graphics → Annotation Categories → Material Tags** (or in the view template). |
 | `Open an elevation or section view` | It only runs in elevations and sections. |
 | `GH-AN-Tag_Material : Material Tag isn't loaded` | Load the tag family. Until then the default material tag is used. The names are `MATERIAL_TAG_FAMILY` / `MATERIAL_TAG_TYPE` near the top of the script. |
 | A wall shows the wrong material (e.g. plasterboard) | The wall was drawn inside-out, so its "exterior" faces into the house. Flip the wall and re-tag it. |

@@ -55,7 +55,7 @@ from RevitServices.Transactions import TransactionManager
 doc = DocumentManager.Instance.CurrentDBDocument
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 material-1"
+SCRIPT_VERSION = "2026-09-29 material-2"
 
 # The material tag to use for every wall and roof.
 MATERIAL_TAG_FAMILY = "GH-AN-Tag_Material"
@@ -115,9 +115,12 @@ def material_tag_type():
 
 
 def tagged_ids_in_view(view):
-    """Ids (as ints) of elements that already have a tag in this view."""
+    """Ids (as ints) of elements that already have a MATERIAL tag in this
+    view (other tags, e.g. keynotes or wall tags, don't count)."""
     ids = set()
-    for tag in FilteredElementCollector(doc, view.Id).OfClass(IndependentTag):
+    for tag in (FilteredElementCollector(doc, view.Id)
+                .OfCategory(BuiltInCategory.OST_MaterialTags)
+                .WhereElementIsNotElementType()):
         try:
             for eid in tag.GetTaggedLocalElementIds():      # Revit 2022+
                 ids.add(eid_int(eid))
@@ -129,6 +132,17 @@ def tagged_ids_in_view(view):
         except Exception:
             pass
     return ids
+
+
+def material_tags_hidden(view):
+    """True if the Material Tags category is turned off in this view
+    (Visibility/Graphics or its view template), so tags would be made but
+    not shown."""
+    try:
+        cat = doc.Settings.Categories.get_Item(BuiltInCategory.OST_MaterialTags)
+        return bool(view.GetCategoryHidden(cat.Id))
+    except Exception:
+        return False
 
 
 def face_centre(face):
@@ -252,9 +266,17 @@ def main():
     finally:
         TransactionManager.Instance.TransactionTaskDone()
 
+    report.append("Found %d wall(s) and %d roof(s) in this view."
+                  % (sum(1 for j in jobs if j[0] == "wall"),
+                     sum(1 for j in jobs if j[0] == "roof")))
     report.append("Tagged %d wall(s) and %d roof(s) with %s : %s."
                   % (counts["wall"], counts["roof"], MATERIAL_TAG_FAMILY,
                      MATERIAL_TAG_TYPE))
+    if tags and material_tags_hidden(view):
+        report.append("WARNING: Material Tags are turned OFF in this view "
+                      "(Visibility/Graphics > Annotation Categories, or its "
+                      "view template), so the new tags aren't visible. Turn "
+                      "Material Tags on to see them.")
     if skipped_tagged:
         report.append("%d already tagged in this view, skipped."
                       % skipped_tagged)
