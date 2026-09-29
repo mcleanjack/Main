@@ -42,7 +42,8 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import (
     FilteredElementCollector, IndependentTag, TagMode, TagOrientation,
     BuiltInCategory, BuiltInParameter, FamilySymbol, HostObjectUtils,
-    ShellLayerType, ViewType, WallKind, UV
+    ShellLayerType, ViewType, WallKind, UV, Options, Solid, PlanarFace,
+    GeometryInstance, Reference
 )
 
 from RevitServices.Persistence import DocumentManager
@@ -55,7 +56,7 @@ from RevitServices.Transactions import TransactionManager
 doc = DocumentManager.Instance.CurrentDBDocument
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 material-2"
+SCRIPT_VERSION = "2026-09-29 material-3"
 
 # The material tag to use for every wall and roof.
 MATERIAL_TAG_FAMILY = "GH-AN-Tag_Material"
@@ -193,6 +194,53 @@ def roof_face(roof, view):
     return facing_face(roof, refs, view)
 
 
+def _planar_faces(geometry):
+    for obj in geometry:
+        if isinstance(obj, Solid):
+            for face in obj.Faces:
+                if isinstance(face, PlanarFace):
+                    yield face
+        elif isinstance(obj, GeometryInstance):
+            for face in _planar_faces(obj.GetInstanceGeometry()):
+                yield face
+
+
+def geometry_refs(element, face, view):
+    """References to the same face taken from the element's own geometry,
+    which is what Revit accepts for material tags: first the view's
+    geometry, then the full 3D geometry. Matched by normal and plane."""
+    try:
+        n0 = face.FaceNormal
+        o0 = face.Origin
+    except Exception:
+        return []
+    refs = []
+    for use_view in (True, False):
+        opt = Options()
+        opt.ComputeReferences = True
+        if use_view:
+            opt.View = view
+        try:
+            geometry = element.get_Geometry(opt)
+        except Exception:
+            continue
+        if geometry is None:
+            continue
+        matches = []
+        for f in _planar_faces(geometry):
+            try:
+                if f.Reference is None or f.FaceNormal.DotProduct(n0) < 0.999:
+                    continue
+                if abs(f.Origin.Subtract(o0).DotProduct(n0)) > 0.003:
+                    continue            # parallel but a different plane
+                matches.append((f.Area, f.Reference))
+            except Exception:
+                continue
+        matches.sort(key=lambda m: -m[0])
+        refs.extend(r for _, r in matches)
+    return refs
+
+
 def create_material_tag(ref, view, add_leader, point, tag_type_id):
     """Material tag on a face reference, as tag_type_id if given."""
     if tag_type_id is not None:
@@ -256,13 +304,29 @@ def main():
                 not_facing[kind] += 1
                 continue
             ref, face = found
+            point = face_centre(face)
+            error = None
+            # Try the face reference from the element's geometry first (what
+            # material tags need), then the side/top face reference, then
+            # the element itself.
+            candidates = geometry_refs(element, face, view) + [ref]
             try:
-                tag = create_material_tag(ref, view, add_leader,
-                                          face_centre(face), tag_type_id)
-                tags.append(tag)
-                counts[kind] += 1
-            except Exception as ex:
-                failed.append("%s %s: %s" % (kind, element.Id, ex))
+                candidates.append(Reference(element))
+            except Exception:
+                pass
+            for candidate in candidates:
+                try:
+                    tag = create_material_tag(candidate, view, add_leader,
+                                              point, tag_type_id)
+                    tags.append(tag)
+                    counts[kind] += 1
+                    error = None
+                    break
+                except Exception as ex:
+                    error = ex
+            if error is not None:
+                message = (str(error).splitlines() or ["?"])[0]
+                failed.append("%s %s: %s" % (kind, element.Id, message))
     finally:
         TransactionManager.Instance.TransactionTaskDone()
 
@@ -285,8 +349,9 @@ def main():
                       "towards this view (edge-on, facing away, or curtain "
                       "walls)." % (not_facing["wall"], not_facing["roof"]))
     if failed:
-        report.append("Couldn't tag %d: %s" % (len(failed),
-                                                "; ".join(failed)))
+        report.append("Couldn't tag %d: %s%s" % (
+            len(failed), "; ".join(failed[:5]),
+            " (and %d more)" % (len(failed) - 5) if len(failed) > 5 else ""))
     return tags, "\n".join(report)
 
 
@@ -300,16 +365,54 @@ def main():
 SELF_MARKER = "MATERIAL_TAG_WALLS_ROOFS_RERUN_MARKER"
 
 
-def _input0_boolean(node):
-    """The Boolean node wired into this node's IN[0], or None."""
+def _input0_boolean(node, workspace=None):
+    """The Boolean node wired into this node's IN[0], or None. Looks via the
+    node's port and via the workspace's connectors, and accepts any node
+    whose type name contains "Bool" or whose Value is a bool, so it copes
+    with differences between Dynamo versions."""
+    sources = []
     try:
         for connector in node.InPorts[0].Connectors:
-            source = connector.Start.Owner
-            if source.GetType().Name == "BoolSelector":
-                return source
+            sources.append(connector.Start.Owner)
     except Exception:
         pass
+    if workspace is not None:
+        try:
+            for connector in workspace.Connectors:
+                end = connector.End
+                if end.Owner.GUID == node.GUID and end.Index == 0:
+                    sources.append(connector.Start.Owner)
+        except Exception:
+            pass
+    for source in sources:
+        try:
+            if "Bool" in source.GetType().Name:
+                return source
+        except Exception:
+            pass
+        try:
+            if isinstance(_get_value(source), bool):
+                return source
+        except Exception:
+            pass
     return None
+
+
+def _get_value(node):
+    """A Boolean node's Value, via .NET reflection if Python can't see it."""
+    try:
+        return node.Value
+    except Exception:
+        prop = node.GetType().GetProperty("Value")
+        return prop.GetValue(node, None)
+
+
+def _set_value(node, value):
+    try:
+        node.Value = value
+    except Exception:
+        prop = node.GetType().GetProperty("Value")
+        prop.SetValue(node, value, None)
 
 
 def flag_self_for_rerun():
@@ -350,7 +453,8 @@ def flag_self_for_rerun():
     except Exception as ex:
         return "couldn't reach Dynamo (%s)" % ex
 
-    toggles = [b for b in (_input0_boolean(n) for n in nodes) if b is not None]
+    toggles = [b for b in (_input0_boolean(n, workspace) for n in nodes)
+               if b is not None]
 
     def mark():
         for node in nodes:
@@ -358,7 +462,7 @@ def flag_self_for_rerun():
 
     def flip():
         for boolean in toggles:
-            boolean.Value = not boolean.Value
+            _set_value(boolean, not _get_value(boolean))
 
     try:
         mark()

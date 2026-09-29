@@ -114,7 +114,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 rerun-3"
+SCRIPT_VERSION = "2026-09-29 rerun-4"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -1187,16 +1187,54 @@ def main():
 SELF_MARKER = "AUTO_DIMENSION_RERUN_MARKER"
 
 
-def _input0_boolean(node):
-    """The Boolean node wired into this node's IN[0], or None."""
+def _input0_boolean(node, workspace=None):
+    """The Boolean node wired into this node's IN[0], or None. Looks via the
+    node's port and via the workspace's connectors, and accepts any node
+    whose type name contains "Bool" or whose Value is a bool, so it copes
+    with differences between Dynamo versions."""
+    sources = []
     try:
         for connector in node.InPorts[0].Connectors:
-            source = connector.Start.Owner
-            if source.GetType().Name == "BoolSelector":
-                return source
+            sources.append(connector.Start.Owner)
     except Exception:
         pass
+    if workspace is not None:
+        try:
+            for connector in workspace.Connectors:
+                end = connector.End
+                if end.Owner.GUID == node.GUID and end.Index == 0:
+                    sources.append(connector.Start.Owner)
+        except Exception:
+            pass
+    for source in sources:
+        try:
+            if "Bool" in source.GetType().Name:
+                return source
+        except Exception:
+            pass
+        try:
+            if isinstance(_get_value(source), bool):
+                return source
+        except Exception:
+            pass
     return None
+
+
+def _get_value(node):
+    """A Boolean node's Value, via .NET reflection if Python can't see it."""
+    try:
+        return node.Value
+    except Exception:
+        prop = node.GetType().GetProperty("Value")
+        return prop.GetValue(node, None)
+
+
+def _set_value(node, value):
+    try:
+        node.Value = value
+    except Exception:
+        prop = node.GetType().GetProperty("Value")
+        prop.SetValue(node, value, None)
 
 
 def flag_self_for_rerun():
@@ -1237,7 +1275,8 @@ def flag_self_for_rerun():
     except Exception as ex:
         return "couldn't reach Dynamo (%s)" % ex
 
-    toggles = [b for b in (_input0_boolean(n) for n in nodes) if b is not None]
+    toggles = [b for b in (_input0_boolean(n, workspace) for n in nodes)
+               if b is not None]
 
     def mark():
         for node in nodes:
@@ -1245,7 +1284,7 @@ def flag_self_for_rerun():
 
     def flip():
         for boolean in toggles:
-            boolean.Value = not boolean.Value
+            _set_value(boolean, not _get_value(boolean))
 
     try:
         mark()

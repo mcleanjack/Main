@@ -56,7 +56,7 @@ Skipped, and counted in the report:
 2. Click **Run** (or run the `.dyn` from **Manage → Dynamo Player**).
 3. The tags appear. The Watch node reports, e.g.:
    ```
-   Material Tag Walls & Roofs script version 2026-09-29 material-2
+   Material Tag Walls & Roofs script version 2026-09-29 material-3
    Tagged 8 wall(s) and 2 roof(s) with GH-AN-Tag_Material : Material Tag.
    Skipped 5 wall(s) and 0 roof(s) with no face towards this view (edge-on, facing away, or curtain walls).
    ```
