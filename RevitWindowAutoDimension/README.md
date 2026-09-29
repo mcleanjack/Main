@@ -45,8 +45,10 @@ No third-party Dynamo packages are required.
 5. The gap dimensions are created for each host wall. The **Result** Watch node
    lists the new dimensions and a short report.
 
-The graph is set to **Manual**, so each click of Run starts a new pick
-session. Press Ctrl+Z in Revit to undo a run.
+The graph is set to **Manual**. Each click of Run starts a new pick, even
+if you haven't changed any inputs, because the script flags the graph as
+changed at the end of every run so Dynamo doesn't reuse the last result.
+Press Ctrl+Z in Revit to undo a run.
 
 You can pick windows in several different walls at once. Each wall gets its
 own line of dimensions.

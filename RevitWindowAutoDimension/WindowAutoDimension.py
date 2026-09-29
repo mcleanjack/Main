@@ -430,7 +430,32 @@ def main():
     return [dims, report]
 
 
+def mark_graph_for_rerun():
+    """Flag every node in the graph as changed so the NEXT click of Run
+    executes this script again.
+
+    Dynamo only re-executes nodes whose inputs changed; without this, a second
+    Run with the same Run/Offset/Type values reuses the cached result and never
+    prompts for windows. The graph is in Manual mode, so this doesn't trigger
+    a run by itself - it just makes the next Run start a fresh pick.
+    """
+    try:
+        clr.AddReference('DynamoRevitDS')
+        from Dynamo.Applications import DynamoRevit
+        try:
+            model = DynamoRevit.RevitDynamoModel
+        except Exception:
+            model = DynamoRevit().RevitDynamoModel
+        workspace = model.CurrentWorkspace
+        for node in workspace.Nodes:
+            node.MarkNodeAsModified(True)
+    except Exception:
+        pass  # e.g. running outside Dynamo for Revit - nothing to reset
+
+
 try:
     OUT = main()
 except Exception:
     OUT = [[], [traceback.format_exc()]]
+finally:
+    mark_graph_for_rerun()
