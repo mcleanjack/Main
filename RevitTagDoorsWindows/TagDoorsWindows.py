@@ -69,7 +69,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-4"
+SCRIPT_VERSION = "2026-09-29 tag-5"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -88,6 +88,12 @@ DOOR_TAG_RULES = [
     ("Opening",           "GH-AN-Tag_Door", "Bulkhead Height"),
     ("Internal",          "GH-AN-Tag_Door", "Internal"),
 ]
+
+# Tag orientation follows the host wall: windows / doors in a wall running
+# across the view get a VERTICAL tag, in a wall running up the view a
+# HORIZONTAL tag. Doors / windows whose name contains any of these words
+# are left with the normal horizontal tag.
+ORIENTATION_EXCLUDE = ["robe"]
 
 
 # ----------------------------------------------------------------------------
@@ -235,22 +241,73 @@ def door_rule(door):
     return None
 
 
-def create_tag(element, view, add_leader, point, tag_type_id):
+def element_name(element):
+    """'family type' of a door / window, lower case."""
+    try:
+        symbol = element.Symbol
+        return (symbol.FamilyName + " " + symbol_name(symbol)).lower()
+    except Exception:
+        return (getattr(element, "Name", "") or "").lower()
+
+
+def wall_direction(element):
+    """Direction of the host wall, or None. Uses the wall's location line
+    if straight, else the element's own along-the-wall direction."""
+    try:
+        curve = element.Host.Location.Curve
+        d = curve.GetEndPoint(1).Subtract(curve.GetEndPoint(0))
+        if d.GetLength() > 1e-9:
+            return d.Normalize()
+    except Exception:
+        pass
+    try:
+        return element.HandOrientation     # along the wall for hosted
+    except Exception:
+        return None
+
+
+def tag_orientation(element, view):
+    """Vertical tag for a window / door in a wall running across the view
+    (horizontal), horizontal tag for one in a wall running up the view
+    (vertical). Robe doors, and anything whose wall can't be read, keep
+    the normal horizontal tag."""
+    if any(text in element_name(element) for text in ORIENTATION_EXCLUDE):
+        return TagOrientation.Horizontal
+    d = wall_direction(element)
+    if d is None:
+        return TagOrientation.Horizontal
+    try:
+        across = abs(d.DotProduct(view.RightDirection))
+        up = abs(d.DotProduct(view.UpDirection))
+    except Exception:
+        return TagOrientation.Horizontal
+    return TagOrientation.Vertical if across >= up \
+        else TagOrientation.Horizontal
+
+
+def create_tag(element, view, add_leader, point, tag_type_id, orientation):
     """Tag By Category; with tag_type_id, switch the new tag to that
     type."""
+    tag = None
     if tag_type_id is not None:
         try:
             # Revit 2022+: create straight away as the chosen tag type.
-            return IndependentTag.Create(
+            tag = IndependentTag.Create(
                 doc, tag_type_id, view.Id, Reference(element), add_leader,
-                TagOrientation.Horizontal, point)
+                orientation, point)
         except Exception:
-            pass
-    tag = IndependentTag.Create(
-        doc, view.Id, Reference(element), add_leader,
-        TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, point)
-    if tag_type_id is not None and tag.GetTypeId() != tag_type_id:
-        tag.ChangeTypeId(tag_type_id)
+            tag = None
+    if tag is None:
+        tag = IndependentTag.Create(
+            doc, view.Id, Reference(element), add_leader,
+            TagMode.TM_ADDBY_CATEGORY, orientation, point)
+        if tag_type_id is not None and tag.GetTypeId() != tag_type_id:
+            tag.ChangeTypeId(tag_type_id)
+    try:
+        if tag.TagOrientation != orientation:
+            tag.TagOrientation = orientation
+    except Exception:
+        pass
     return tag
 
 
@@ -321,6 +378,7 @@ def tag_picked(view, add_leader, skip_tagged, report):
     counts = {"door": 0, "window": 0}
     tag_types = door_tag_types()
     by_rule = {}            # "Robe Door" -> count
+    vertical = 0
     missing_types = set()
     skipped_tagged = 0
     ignored = 0
@@ -358,8 +416,11 @@ def tag_picked(view, add_leader, skip_tagged, report):
                 if tag_type_id is None:
                     missing_types.add("%s : %s" % (family, tag_type))
             try:
+                orientation = tag_orientation(element, view)
                 tag = create_tag(element, view, add_leader, point,
-                                 tag_type_id)
+                                 tag_type_id, orientation)
+                if orientation == TagOrientation.Vertical:
+                    vertical += 1
                 if tag_type_id is not None:
                     by_rule[rule[2]] = by_rule.get(rule[2], 0) + 1
                 tags.append(tag)
@@ -372,6 +433,9 @@ def tag_picked(view, add_leader, skip_tagged, report):
 
     report.append("Tagged %d door(s) and %d window(s)."
                   % (counts["door"], counts["window"]))
+    if tags:
+        report.append("%d tag(s) vertical (in walls running across the "
+                      "view), %d horizontal." % (vertical, len(tags) - vertical))
     if by_rule:
         report.append("Door tag types used: " + ", ".join(
             "%s x%d" % (name, n) for name, n in sorted(by_rule.items())))
