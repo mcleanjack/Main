@@ -29,6 +29,30 @@ loaded as the default for the Doors / Windows category.
 | `IN[2]` | **Boolean** | `True` (default) = skip windows/doors already tagged in this view. `False` = tag them again. |
 | `IN[3]` | **Boolean** | `True` (default) = hide everything except windows & doors while you pick (see below). `False` = pick in the normal view. |
 
+### Door tag types by door name
+
+Doors get a specific tag type depending on their **family or type name**
+(not case-sensitive). The first match wins:
+
+| Door name contains | Tag family : type | e.g. |
+|---|---|---|
+| `Robe` | GH-AN-Tag_Door : **Robe Door** | Robe Sliding Door : Smart - 2100H 2 x 520 |
+| `Opening` | GH-AN-Tag_Door : **Bulkhead Height** | Door - Opening : Opening - 2200H |
+| `Internal` | GH-AN-Tag_Door : **Internal** | Internal Timber Flush Door_Single : 2040 x 870 |
+| anything else | the default door tag (Tag By Category) | |
+
+Windows always get the default window tag.
+
+- **Robe is checked first**, so a door named e.g. "Internal Robe…" gets the
+  Robe tag.
+- **To change the rules**, edit the `DOOR_TAG_RULES` list near the top of
+  the script. Each row is `("text in door name", "tag family", "tag
+  type")`.
+- **If a tag type isn't loaded**, those doors get the default door tag, and
+  the report lists the missing type.
+- The report shows which types were used, e.g.
+  `Door tag types used: Bulkhead Height x2, Internal x5, Robe Door x3`.
+
 ---
 
 ## 2. Using it
@@ -43,7 +67,7 @@ loaded as the default for the Doors / Windows category.
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-3
+   Tag Doors & Windows script version 2026-09-29 tag-4
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.

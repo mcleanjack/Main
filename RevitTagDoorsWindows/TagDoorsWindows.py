@@ -51,7 +51,7 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import (
     FilteredElementCollector, IndependentTag, Reference, TagMode,
     TagOrientation, LocationPoint, BuiltInCategory, ViewType, XYZ,
-    ElementId, TemporaryViewMode
+    ElementId, TemporaryViewMode, FamilySymbol, BuiltInParameter
 )
 from System.Collections.Generic import List as NetList
 from Autodesk.Revit.UI.Selection import ObjectType
@@ -69,12 +69,25 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-3"
+SCRIPT_VERSION = "2026-09-29 tag-4"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
     BuiltInCategory.OST_Windows: "window",
 }
+
+# Door tag rules: if the door's family or type name contains the text
+# (not case-sensitive), it gets that tag family : type. Checked top to
+# bottom and the first match wins, so put the most specific first (e.g.
+# "Robe" before "Internal", so "Internal Robe..." gets the Robe tag).
+# Doors matching no rule get the default door tag (Tag By Category).
+# Edit / add rows here to suit your tags.
+DOOR_TAG_RULES = [
+    # (text in door name, tag family,       tag type)
+    ("Robe",              "GH-AN-Tag_Door", "Robe Door"),
+    ("Opening",           "GH-AN-Tag_Door", "Bulkhead Height"),
+    ("Internal",          "GH-AN-Tag_Door", "Internal"),
+]
 
 
 # ----------------------------------------------------------------------------
@@ -179,6 +192,68 @@ def reset_isolate(view):
         pass
 
 
+def symbol_name(symbol):
+    """Type name of a family type (works on both Python engines)."""
+    try:
+        p = symbol.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM)
+        if p is not None and p.AsString():
+            return p.AsString()
+    except Exception:
+        pass
+    try:
+        return symbol.Name or ""
+    except Exception:
+        return ""
+
+
+def door_tag_types():
+    """{(family lower, type lower): tag type ElementId} for loaded door
+    tags."""
+    out = {}
+    for sym in (FilteredElementCollector(doc)
+                .OfCategory(BuiltInCategory.OST_DoorTags)
+                .OfClass(FamilySymbol)):
+        try:
+            out[(sym.FamilyName.strip().lower(),
+                 symbol_name(sym).strip().lower())] = sym.Id
+        except Exception:
+            continue
+    return out
+
+
+def door_rule(door):
+    """The DOOR_TAG_RULES row whose text is in the door's family or type
+    name, or None."""
+    try:
+        symbol = door.Symbol
+        name = (symbol.FamilyName + " " + symbol_name(symbol)).lower()
+    except Exception:
+        name = (getattr(door, "Name", "") or "").lower()
+    for text, family, tag_type in DOOR_TAG_RULES:
+        if text.lower() in name:
+            return text, family, tag_type
+    return None
+
+
+def create_tag(element, view, add_leader, point, tag_type_id):
+    """Tag By Category; with tag_type_id, switch the new tag to that
+    type."""
+    if tag_type_id is not None:
+        try:
+            # Revit 2022+: create straight away as the chosen tag type.
+            return IndependentTag.Create(
+                doc, tag_type_id, view.Id, Reference(element), add_leader,
+                TagOrientation.Horizontal, point)
+        except Exception:
+            pass
+    tag = IndependentTag.Create(
+        doc, view.Id, Reference(element), add_leader,
+        TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, point)
+    if tag_type_id is not None and tag.GetTypeId() != tag_type_id:
+        tag.ChangeTypeId(tag_type_id)
+    return tag
+
+
 def pick_elements():
     """Click windows / doors, then Enter or Finish. None if cancelled."""
     try:
@@ -244,6 +319,9 @@ def tag_picked(view, add_leader, skip_tagged, report):
     cats = category_ids()
     already = tagged_ids_in_view(view) if skip_tagged else set()
     counts = {"door": 0, "window": 0}
+    tag_types = door_tag_types()
+    by_rule = {}            # "Robe Door" -> count
+    missing_types = set()
     skipped_tagged = 0
     ignored = 0
     failed = []
@@ -271,11 +349,19 @@ def tag_picked(view, add_leader, skip_tagged, report):
             if point is None:
                 failed.append("%s %s: no location" % (kind, element.Id))
                 continue
+            tag_type_id = None
+            rule = door_rule(element) if kind == "door" else None
+            if rule is not None:
+                _, family, tag_type = rule
+                tag_type_id = tag_types.get((family.lower(),
+                                             tag_type.lower()))
+                if tag_type_id is None:
+                    missing_types.add("%s : %s" % (family, tag_type))
             try:
-                tag = IndependentTag.Create(
-                    doc, view.Id, Reference(element), add_leader,
-                    TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal,
-                    point)
+                tag = create_tag(element, view, add_leader, point,
+                                 tag_type_id)
+                if tag_type_id is not None:
+                    by_rule[rule[2]] = by_rule.get(rule[2], 0) + 1
                 tags.append(tag)
                 counts[kind] += 1
                 already.add(key)
@@ -286,6 +372,12 @@ def tag_picked(view, add_leader, skip_tagged, report):
 
     report.append("Tagged %d door(s) and %d window(s)."
                   % (counts["door"], counts["window"]))
+    if by_rule:
+        report.append("Door tag types used: " + ", ".join(
+            "%s x%d" % (name, n) for name, n in sorted(by_rule.items())))
+    if missing_types:
+        report.append("Tag type(s) not loaded, used the default door tag "
+                      "instead: " + ", ".join(sorted(missing_types)))
     if skipped_tagged:
         report.append("%d already tagged in this view, skipped."
                       % skipped_tagged)
