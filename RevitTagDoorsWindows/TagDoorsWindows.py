@@ -72,7 +72,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-15"
+SCRIPT_VERSION = "2026-09-29 tag-16"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -105,6 +105,10 @@ DOOR_TAG_RULES = [
     ("Internal", [("GH-AN-Tag_Door", "Internal", None, 0)]),
 ]
 MM = 1.0 / 304.8     # feet per mm
+
+# In elevations / sections EVERY door gets just this one tag (the rules
+# above are for plan views). Set to None to use the rules everywhere.
+DOOR_TAG_ELEVATION = ("GH-AN-Tag_Door", "Door Mark (External Door)")
 
 # Tag orientation follows the host wall (PLAN VIEWS ONLY; elsewhere tags
 # stay horizontal):
@@ -654,6 +658,11 @@ def tag_picked(view, add_leader, skip_tagged, report):
                     storage_no_leaf.append(str(element.Id))
             # No rule: one default tag (Tag By Category), usual orientation.
             specs = rule[1] if rule is not None else [(None, None, None, 0)]
+            if kind == "door" and DOOR_TAG_ELEVATION \
+                    and not isinstance(view, ViewPlan):
+                # Elevations / sections: one tag for every door.
+                specs = [(DOOR_TAG_ELEVATION[0], DOOR_TAG_ELEVATION[1],
+                          None, 0)]
             made = 0
             for i, spec in enumerate(specs):
                 family, tag_type, mode, offset_mm = spec[:4]

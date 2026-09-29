@@ -29,14 +29,19 @@ loaded as the default for the Doors / Windows category.
 | `IN[2]` | **Boolean** | `True` (default) = skip windows/doors already tagged in this view. `False` = tag them again. |
 | `IN[3]` | **Boolean** | `True` (default) = hide everything except windows & doors while you pick, **in plan views** (see below). `False` = pick in the normal view. |
 
-### Door tag types by door name
+### Door tag types
 
-Doors get specific tag types depending on their **family or type name**
-(not case-sensitive). The first match wins:
+**Elevations and sections:** every door gets one tag,
+**GH-AN-Tag_Door : Door Mark (External Door)**. The name-based rules below
+don't apply there. (Set `DOOR_TAG_ELEVATION = None` near the top of the
+script to use the rules in elevations too.)
+
+**Plan views:** doors get specific tag types depending on their **family or
+type name** (not case-sensitive). The first match wins:
 
 | Door name contains | Tag(s) | e.g. |
 |---|---|---|
-| `Entry` | **Plans: two tags**: GH-AN-Tag_Door : **Door Mark (H x W, Construction Type)**, running along the wall and offset 600 mm to the door's facing side; plus GH-AN-Tag_Door : **Internal**, square to the wall, at the door. **Elevations/sections: Door Mark only** (no Internal tag). | Entry Door ... |
+| `Entry` | **two tags**: GH-AN-Tag_Door : **Door Mark (H x W, Construction Type)**, running along the wall and offset 600 mm to the door's facing side; plus GH-AN-Tag_Door : **Internal**, square to the wall, at the door | Entry Door ... |
 | `Robe` | GH-AN-Tag_Door : **Robe Door** | Robe Sliding Door : Smart - 2100H 2 x 520 |
 | `Opening` | GH-AN-Tag_Door : **Bulkhead Height** | Door - Opening : Opening - 2200H |
 | `Internal` | GH-AN-Tag_Door : **Internal** | Internal Timber Flush Door_Single : 2040 x 870 |
@@ -138,7 +143,7 @@ door leaf**, like the `820` tag on a robe door.
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-15
+   Tag Doors & Windows script version 2026-09-29 tag-16
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.
