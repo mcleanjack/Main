@@ -55,7 +55,7 @@ own string.
 | Part of the string | Reference used |
 |---|---|
 | Window sides | The **jamb faces of the opening cut in the host wall**, i.e. the masonry/rough opening. These are real wall faces, so the dimensions stay attached and update when windows move or resize. |
-| Start / end | The **outer face** (the face pointing away from the windows) of the nearest perpendicular wall beyond the first and last picked window. |
+| Start / end | The **outer face** (the face pointing away from the windows) of the **external corner wall** at each end of the host wall. Interior walls such as robes and partitions are never used. |
 | Fallback end | If no perpendicular wall is found on a side, the host wall's own end face is used. |
 | Fallback window | If a window family doesn't cut the wall, its centre (Left/Right centre) reference is used and a note is added to the report. |
 
@@ -64,13 +64,11 @@ How the perpendicular wall is chosen:
 - It must be visible in the current view, straight, and within about 1° of
   perpendicular to the host wall.
 - It must touch the host wall, on either the interior or exterior side.
-- Of those walls, the one **closest to the outermost picked window** on each
-  side is used. In your plan, picking both BED 3 and BED 2 windows ends the
-  string on the top and bottom external walls (the green walls in your
-  sketch). The internal BED 3/BED 2 partition sits between the windows, so
-  it is ignored. If you pick only the BED 2 window, the string ends on that
-  partition instead, since it is the nearest perpendicular wall above the
-  window.
+- Of those walls, the one **furthest out** on each side is used, which is
+  the external corner wall. Interior walls that butt into the host wall
+  part-way along, such as the ROBE 2 wall or the BED 3/BED 2 partition, are
+  skipped. The string always runs corner to corner, even if you pick only
+  one window.
 
 The dimension line is placed parallel to the host wall on its **exterior**
 side, as set by the wall's orientation. If a string lands on the inside, the
@@ -80,6 +78,8 @@ wall is flipped: select it and use the flip arrows, then re-run.
 
 ## 3. Limitations
 
+- If the external wall is modelled as several separate wall segments, the
+  string only runs to the ends of the segment hosting the picked windows.
 - Straight host walls only; curved walls are skipped and reported.
 - Windows in curtain walls aren't hosted in a basic wall and are skipped.
 - Walls in linked models are not used as end walls.
