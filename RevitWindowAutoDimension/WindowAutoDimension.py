@@ -26,9 +26,11 @@
 #      host wall: of the walls visible in the view that run perpendicular to
 #      the host wall and meet it, the one furthest out on each side. Interior
 #      walls that butt into the host wall part-way along (robes, partitions)
-#      are ignored. Its "outer" face is the face pointing away from the
-#      openings, i.e. the external corner of the building. If no such wall
-#      is found on a side, the host wall's own end face is used instead.
+#      are ignored. The string snaps to that wall's EXTERIOR face (its
+#      Finish 2 / outside layer, from the wall's orientation) - the external
+#      corner of the building, or the brick face at a step in the facade.
+#      If no such wall is found on a side, the host wall's own end face is
+#      used instead.
 #
 #   Jambs are taken from the opening cut in the host wall itself (the wall
 #   faces on each side of the rough/masonry opening), so the string snaps to
@@ -312,16 +314,24 @@ def dimension_wall(host, openings, dim_type, report):
                  if s == sign]
         return pick(faces, key=lambda t: t[0]) if faces else None
 
+    def exterior_face(wall):
+        # The face on the wall's EXTERIOR side (its Finish 2 / brick face),
+        # as set by the wall's orientation. At an external corner this faces
+        # away from the windows; at a step in the facade it faces towards
+        # them - either way it's the outside face of the building.
+        sign = 1 if flat(wall.Orientation).DotProduct(direction) > 0 else -1
+        return outer_face(wall, sign, max if sign > 0 else min)
+
     start = None
     if before:
-        start = outer_face(min(before, key=lambda t: t[0])[1], -1, min)
+        start = exterior_face(min(before, key=lambda t: t[0])[1])
     if start is None:
         start = outer_face(host, -1, min)
         report.append("Wall {}: no perpendicular wall before the first "
                       "opening - using the wall end.".format(eid_int(host.Id)))
     end = None
     if after:
-        end = outer_face(max(after, key=lambda t: t[0])[1], 1, max)
+        end = exterior_face(max(after, key=lambda t: t[0])[1])
     if end is None:
         end = outer_face(host, 1, max)
         report.append("Wall {}: no perpendicular wall after the last "

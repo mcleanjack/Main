@@ -60,7 +60,7 @@ own line of dimensions.
 | Part of the string | Reference used |
 |---|---|
 | Window sides | The **jamb faces of the opening cut in the host wall**, i.e. the masonry/rough opening. These are real wall faces, so the dimensions stay attached and update when windows move or resize. |
-| Start / end | The **outer face** (the face pointing away from the windows) of the **external corner wall** at each end of the host wall. Interior walls such as robes and partitions are never used. |
+| Start / end | The **exterior face** (the Finish 2 / outside layer, taken from the wall's orientation) of the **external wall** at each end of the host wall. At an external corner this is the building corner. Where the façade steps, it's the brick face of the step, not the internal plaster. Interior walls such as robes and partitions are never used. |
 | Fallback end | If no perpendicular wall is found on a side, the host wall's own end face is used. |
 | Fallback window | If a window family doesn't cut the wall, its centre (Left/Right centre) reference is used and a note is added to the report. |
 
@@ -76,8 +76,10 @@ How the perpendicular wall is chosen:
   one window.
 
 The dimension line is placed parallel to the host wall on its **exterior**
-side, as set by the wall's orientation. If a string lands on the inside, the
-wall is flipped: select it and use the flip arrows, then re-run.
+side, and the end walls are measured to their **exterior** face. Both come
+from each wall's orientation. If a string lands on the inside, or ends on
+the plaster instead of the brick, that wall is flipped. Select it, use the
+flip arrows (or Spacebar), then re-run.
 
 ---
 

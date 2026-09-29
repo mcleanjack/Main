@@ -1,5 +1,5 @@
 {
-  "Uuid": "6b93401b-842e-4eb5-8659-55fc34e55751",
+  "Uuid": "021a010c-705a-4f23-a9c5-b5a9ee7337d6",
   "IsCustomNode": false,
   "Description": "Click windows in a plan view to dimension between them, ending on the outer faces of the perpendicular walls.",
   "Name": "WindowAutoDimension",
@@ -8,7 +8,7 @@
   },
   "Inputs": [
     {
-      "Id": "eebdd60a67264903a51e789745a94b58",
+      "Id": "7bbd647cacde43c587c120cd72dba8c7",
       "Name": "Run",
       "Type": "boolean",
       "Type2": "boolean",
@@ -17,7 +17,7 @@
       "SelectedIndex": 0
     },
     {
-      "Id": "b6cc6968182b4189890ca2d2b2f4f114",
+      "Id": "d36ab81bb8ef4d8e998d30efb0adfb16",
       "Name": "Offset from wall (mm)",
       "Type": "number",
       "Type2": "number",
@@ -27,7 +27,7 @@
       "SelectedIndex": 0
     },
     {
-      "Id": "5fe389aa759d4b44995d90711a6413a4",
+      "Id": "576cde22c9bc4070b47c614509d5c8a3",
       "Name": "Dimension Type (blank = default)",
       "Type": "string",
       "Type2": "string",
@@ -42,11 +42,11 @@
       "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
       "NodeType": "BooleanInputNode",
       "InputValue": true,
-      "Id": "eebdd60a67264903a51e789745a94b58",
+      "Id": "7bbd647cacde43c587c120cd72dba8c7",
       "Inputs": [],
       "Outputs": [
         {
-          "Id": "5dd1cbcafb734cb9bebfb38c694258dd",
+          "Id": "53e6e4506c93456db88fc7be9e6bd171",
           "Name": "",
           "Description": "Boolean",
           "UsingDefaultValue": false,
@@ -63,11 +63,11 @@
       "NodeType": "NumberInputNode",
       "NumberType": "Double",
       "InputValue": 1000.0,
-      "Id": "b6cc6968182b4189890ca2d2b2f4f114",
+      "Id": "d36ab81bb8ef4d8e998d30efb0adfb16",
       "Inputs": [],
       "Outputs": [
         {
-          "Id": "aa0a6c6efd05481386abda616b315bb1",
+          "Id": "5dbb30cdc346451ea9359f93409daf04",
           "Name": "",
           "Description": "Double",
           "UsingDefaultValue": false,
@@ -83,11 +83,11 @@
       "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
       "NodeType": "StringInputNode",
       "InputValue": "",
-      "Id": "5fe389aa759d4b44995d90711a6413a4",
+      "Id": "576cde22c9bc4070b47c614509d5c8a3",
       "Inputs": [],
       "Outputs": [
         {
-          "Id": "a5feec27c7a748f8b0c3ac510a62fcad",
+          "Id": "c17fdd26eb0b4ee0918f4256452ca04e",
           "Name": "",
           "Description": "String",
           "UsingDefaultValue": false,
@@ -102,13 +102,13 @@
     {
       "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
       "NodeType": "PythonScriptNode",
-      "Code": "# ============================================================================\n# Revit Window Auto-Dimension - dimension between windows in plan views\n# ----------------------------------------------------------------------------\n# Paste this entire file into a single Dynamo \"Python Script\" node, or open\n# the ready-made WindowAutoDimension.dyn in the same folder.\n#\n# Engine: CPython3 (Dynamo 2.6+ / Revit 2022+ default). Also runs unmodified\n# on the legacy IronPython2 engine.\n#\n# What it does:\n#   1. Prompts you to click windows (and/or doors) in the active plan view.\n#      Click as many as you like, then press \"Finish\" on the Options Bar\n#      (or Enter). Esc cancels.\n#   2. Groups the picked openings by their host wall. For each host wall it\n#      dimensions the solid wall BETWEEN the openings (window widths are\n#      not dimensioned), placed on one line outside the wall's exterior face:\n#\n#        outer face of the perpendicular wall -> first jamb of opening 1\n#        last jamb of opening 1 -> first jamb of opening 2 ... (etc.)\n#        last jamb of last opening -> outer face of the perpendicular wall\n#\n#      Each gap is its own dimension (Revit can't leave gaps in one string),\n#      all lined up so they read as a single string.\n#\n#      \"Perpendicular wall\" = the external corner wall at each end of the\n#      host wall: of the walls visible in the view that run perpendicular to\n#      the host wall and meet it, the one furthest out on each side. Interior\n#      walls that butt into the host wall part-way along (robes, partitions)\n#      are ignored. Its \"outer\" face is the face pointing away from the\n#      openings, i.e. the external corner of the building. If no such wall\n#      is found on a side, the host wall's own end face is used instead.\n#\n#   Jambs are taken from the opening cut in the host wall itself (the wall\n#   faces on each side of the rough/masonry opening), so the string snaps to\n#   real, stable wall geometry. If an opening has no cut faces (e.g. a\n#   family that doesn't cut the wall), its centreline reference is used.\n#\n# Inputs:\n#   IN[0] Boolean  Run            - set True and run the graph to start picking.\n#   IN[1] Number   Offset (mm)    - distance of the dimension line from the\n#                                   host wall's exterior face (model mm).\n#                                   Default 1000.\n#   IN[2] String   Dimension Type - name of a linear dimension type to use.\n#                                   Leave blank to use the project default.\n#\n# Output (OUT): [created Dimension elements, report lines]\n# ============================================================================\n\nimport clr\nimport traceback\n\nclr.AddReference('RevitAPI')\nclr.AddReference('RevitAPIUI')\nclr.AddReference('RevitServices')\n\nfrom Autodesk.Revit.DB import (\n    FilteredElementCollector, Wall, LocationCurve, LocationPoint, Line, XYZ,\n    Options, Solid, PlanarFace, GeometryInstance, ReferenceArray,\n    DimensionType, DimensionStyleType, BuiltInCategory, BuiltInParameter,\n    FamilyInstanceReferenceType, UnitUtils, ViewPlan, ViewType\n)\nfrom Autodesk.Revit.UI.Selection import ObjectType\nfrom Autodesk.Revit.Exceptions import OperationCanceledException\nfrom RevitServices.Persistence import DocumentManager\nfrom RevitServices.Transactions import TransactionManager\n\n# ----------------------------------------------------------------------------\n# Environment / inputs\n# ----------------------------------------------------------------------------\n\ndoc = DocumentManager.Instance.CurrentDBDocument\nuidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument\nview = uidoc.ActiveView\n\n\ndef _in(index, default):\n    try:\n        value = IN[index]\n    except (NameError, IndexError):\n        return default\n    return default if value is None else value\n\n\nRUN = bool(_in(0, True))\nOFFSET_MM = float(_in(1, 1000.0))\nDIM_TYPE_NAME = str(_in(2, \"\")).strip()\n\n# Categories that can be picked. Doors are accepted too, since they sit in\n# the same wall and are usually part of the same dimension string.\nPICKABLE_CATEGORIES = (BuiltInCategory.OST_Windows, BuiltInCategory.OST_Doors)\n\n\n# ----------------------------------------------------------------------------\n# Small helpers\n# ----------------------------------------------------------------------------\n\ndef mm(value):\n    \"\"\"Millimetres -> Revit internal feet, across old/new unit APIs.\"\"\"\n    try:\n        from Autodesk.Revit.DB import UnitTypeId\n        return UnitUtils.ConvertToInternalUnits(value, UnitTypeId.Millimeters)\n    except Exception:\n        from Autodesk.Revit.DB import DisplayUnitType\n        return UnitUtils.ConvertToInternalUnits(\n            value, DisplayUnitType.DUT_MILLIMETERS)\n\n\nTOL_SAME = mm(1.0)       # two references closer than this are duplicates\nTOL_SEARCH = mm(100.0)   # slack when matching faces / walls to openings\n\n\ndef eid_int(element_id):\n    try:\n        return element_id.Value            # Revit 2024+\n    except AttributeError:\n        return element_id.IntegerValue     # older versions\n\n\ndef is_pickable(el):\n    cat = el.Category\n    if cat is None:\n        return False\n    for bic in PICKABLE_CATEGORIES:\n        try:\n            if cat.BuiltInCategory == bic:  # Revit 2023+\n                return True\n        except AttributeError:\n            if eid_int(cat.Id) == int(bic):\n                return True\n    return False\n\n\ndef flat(v):\n    return XYZ(v.X, v.Y, 0)\n\n\ndef along(point, origin, direction):\n    \"\"\"Signed distance of point from origin, measured along direction.\"\"\"\n    return point.Subtract(origin).DotProduct(direction)\n\n\ndef type_name(element_type):\n    p = element_type.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM)\n    return p.AsString() if p is not None else \"\"\n\n\ndef geometry_options():\n    opts = Options()\n    opts.ComputeReferences = True\n    opts.IncludeNonVisibleObjects = False\n    opts.View = view\n    return opts\n\n\ndef planar_faces(element):\n    \"\"\"All planar faces (with references) of an element in the active view.\"\"\"\n    faces = []\n    geo = element.get_Geometry(geometry_options())\n    if geo is None:\n        return faces\n    solids = []\n    for g in geo:\n        if isinstance(g, Solid):\n            solids.append(g)\n        elif isinstance(g, GeometryInstance):\n            for gi in g.GetInstanceGeometry():\n                if isinstance(gi, Solid):\n                    solids.append(gi)\n    for solid in solids:\n        if solid.Volume <= 0:\n            continue\n        for f in solid.Faces:\n            if isinstance(f, PlanarFace) and f.Reference is not None:\n                faces.append(f)\n    return faces\n\n\ndef faces_across(element, origin, direction):\n    \"\"\"Faces whose normal is parallel to direction.\n\n    Returns a list of (position along direction, sign of normal, reference).\n    sign > 0 means the face points towards +direction.\n    \"\"\"\n    result = []\n    for f in planar_faces(element):\n        dot = f.FaceNormal.DotProduct(direction)\n        if abs(dot) > 0.999:\n            result.append((along(f.Origin, origin, direction),\n                           1 if dot > 0 else -1, f.Reference))\n    return result\n\n\ndef find_dimension_type():\n    if not DIM_TYPE_NAME:\n        return None\n    for dt in FilteredElementCollector(doc).OfClass(DimensionType):\n        try:\n            if dt.StyleType != DimensionStyleType.Linear:\n                continue\n        except Exception:\n            pass\n        if type_name(dt) == DIM_TYPE_NAME:\n            return dt\n    return None\n\n\n# ----------------------------------------------------------------------------\n# Core\n# ----------------------------------------------------------------------------\n\ndef opening_span(opening, origin, direction):\n    \"\"\"(min, centre, max) of an opening's bounding box along direction.\"\"\"\n    centre = along(opening.Location.Point, origin, direction)\n    bb = opening.get_BoundingBox(None)\n    if bb is None:\n        return centre, centre, centre\n    values = [along(XYZ(x, y, origin.Z), origin, direction)\n              for x in (bb.Min.X, bb.Max.X) for y in (bb.Min.Y, bb.Max.Y)]\n    return min(values), centre, max(values)\n\n\ndef jamb_references(opening, host_faces, origin, direction, report):\n    \"\"\"References for the two jambs of an opening, as (position, reference).\"\"\"\n    lo, centre, hi = opening_span(opening, origin, direction)\n    # Low-side jamb: wall face that points INTO the opening (+direction).\n    left = [(p, r) for p, s, r in host_faces\n            if s > 0 and lo - TOL_SEARCH <= p < centre]\n    # High-side jamb: wall face that points INTO the opening (-direction).\n    right = [(p, r) for p, s, r in host_faces\n             if s < 0 and centre < p <= hi + TOL_SEARCH]\n    if left and right:\n        # Tightest faces = the actual opening in the wall.\n        return [max(left, key=lambda t: t[0]), min(right, key=lambda t: t[0])]\n\n    report.append(\"Opening {} does not cut its host wall - dimensioned to its \"\n                  \"centreline instead.\".format(eid_int(opening.Id)))\n    refs = opening.GetReferences(FamilyInstanceReferenceType.CenterLeftRight)\n    if refs is not None and refs.Count > 0:\n        return [(centre, refs[0])]\n    report.append(\"Opening {} has no usable reference - skipped.\"\n                  .format(eid_int(opening.Id)))\n    return []\n\n\ndef perpendicular_walls(host, origin, direction, normal):\n    \"\"\"Walls in the view that run perpendicular to host and meet it.\n\n    Returns a list of (position along host direction, wall).\n    \"\"\"\n    host_line = host.Location.Curve\n    s0 = along(host_line.GetEndPoint(0), origin, direction)\n    s1 = along(host_line.GetEndPoint(1), origin, direction)\n    s_min, s_max = min(s0, s1), max(s0, s1)\n    host_half = host.Width / 2.0\n\n    result = []\n    walls = FilteredElementCollector(doc, view.Id).OfClass(Wall) \\\n        .WhereElementIsNotElementType()\n    for w in walls:\n        if eid_int(w.Id) == eid_int(host.Id):\n            continue\n        loc = w.Location\n        if not isinstance(loc, LocationCurve) or not isinstance(loc.Curve, Line):\n            continue\n        line = loc.Curve\n        if abs(flat(line.Direction).Normalize().DotProduct(direction)) > 0.01:\n            continue  # not perpendicular\n        p0, p1 = line.GetEndPoint(0), line.GetEndPoint(1)\n        pos = along(p0, origin, direction)\n        reach = w.Width / 2.0 + TOL_SEARCH\n        if pos < s_min - reach or pos > s_max + reach:\n            continue  # beyond the ends of the host wall\n        n0, n1 = along(p0, origin, normal), along(p1, origin, normal)\n        slack = host_half + w.Width / 2.0 + TOL_SEARCH\n        if min(n0, n1) > slack or max(n0, n1) < -slack:\n            continue  # doesn't touch the host wall\n        result.append((pos, w))\n    return result\n\n\ndef dimension_wall(host, openings, dim_type, report):\n    line = host.Location.Curve\n    origin = line.GetEndPoint(0)\n    direction = flat(line.Direction).Normalize()\n    exterior = flat(host.Orientation).Normalize()\n\n    host_faces = faces_across(host, origin, direction)\n\n    # --- Opening jambs --------------------------------------------------\n    # One (low jamb, high jamb) pair per opening, in order along the wall.\n    openings_jambs = []\n    for o in sorted(openings,\n                    key=lambda e: along(e.Location.Point, origin, direction)):\n        jambs = jamb_references(o, host_faces, origin, direction, report)\n        if jambs:\n            openings_jambs.append((jambs[0], jambs[-1]))\n    if not openings_jambs:\n        report.append(\"Wall {}: nothing to dimension.\".format(eid_int(host.Id)))\n        return []\n    first = openings_jambs[0][0][0]\n    last = openings_jambs[-1][1][0]\n\n    # --- End references: external corner walls (or host wall ends) -------\n    # Take the OUTERMOST perpendicular wall on each side, so interior walls\n    # that butt into the host wall between the corners are skipped.\n    perp = perpendicular_walls(host, origin, direction, exterior)\n    before = [t for t in perp if t[0] < first]\n    after = [t for t in perp if t[0] > last]\n\n    def outer_face(wall, sign, pick):\n        faces = [(p, r) for p, s, r in faces_across(wall, origin, direction)\n                 if s == sign]\n        return pick(faces, key=lambda t: t[0]) if faces else None\n\n    start = None\n    if before:\n        start = outer_face(min(before, key=lambda t: t[0])[1], -1, min)\n    if start is None:\n        start = outer_face(host, -1, min)\n        report.append(\"Wall {}: no perpendicular wall before the first \"\n                      \"opening - using the wall end.\".format(eid_int(host.Id)))\n    end = None\n    if after:\n        end = outer_face(max(after, key=lambda t: t[0])[1], 1, max)\n    if end is None:\n        end = outer_face(host, 1, max)\n        report.append(\"Wall {}: no perpendicular wall after the last \"\n                      \"opening - using the wall end.\".format(eid_int(host.Id)))\n\n    # --- Gaps BETWEEN openings (window widths are not dimensioned) ------\n    #   start -> low jamb of opening 1\n    #   high jamb of opening 1 -> low jamb of opening 2 ... etc.\n    #   high jamb of last opening -> end\n    gaps = []\n    if start is not None:\n        gaps.append((start, openings_jambs[0][0]))\n    for (_, hi), (lo, _) in zip(openings_jambs, openings_jambs[1:]):\n        gaps.append((hi, lo))\n    if end is not None:\n        gaps.append((openings_jambs[-1][1], end))\n\n    # --- Dimension line, parallel to the wall on its exterior side --------\n    # Every gap dimension sits on the same line, so together they read as\n    # one string with the windows left blank.\n    ext_faces = [along(f.Origin, origin, exterior)\n                 for f in planar_faces(host)\n                 if f.FaceNormal.DotProduct(exterior) > 0.999]\n    ext_face = max(ext_faces) if ext_faces else host.Width / 2.0\n    offset = ext_face + mm(OFFSET_MM)\n    base = origin.Add(exterior.Multiply(offset))\n\n    dims = []\n    for (p0, r0), (p1, r1) in gaps:\n        if abs(p1 - p0) < TOL_SAME:\n            continue  # openings touching / window at the corner\n        ref_array = ReferenceArray()\n        ref_array.Append(r0)\n        ref_array.Append(r1)\n        dim_line = Line.CreateBound(base.Add(direction.Multiply(p0)),\n                                    base.Add(direction.Multiply(p1)))\n        if dim_type is not None:\n            dim = doc.Create.NewDimension(view, dim_line, ref_array, dim_type)\n        else:\n            dim = doc.Create.NewDimension(view, dim_line, ref_array)\n        dims.append(dim)\n    report.append(\"Wall {}: created {} dimensions between openings.\".format(\n        eid_int(host.Id), len(dims)))\n    return dims\n\n\ndef main():\n    report = []\n    dims = []\n\n    if not RUN:\n        return [dims, [\"Set Run to True and run the graph to start.\"]]\n    if not isinstance(view, ViewPlan) or view.ViewType not in (\n            ViewType.FloorPlan, ViewType.CeilingPlan, ViewType.AreaPlan,\n            ViewType.EngineeringPlan):\n        return [dims, [\"Open a floor plan view and run again.\"]]\n\n    try:\n        picked = uidoc.Selection.PickObjects(\n            ObjectType.Element,\n            \"Click the windows to dimension, then press Finish (Esc to cancel)\")\n    except OperationCanceledException:\n        return [dims, [\"Selection cancelled.\"]]\n\n    # Group openings by host wall.\n    groups = {}\n    for ref in picked:\n        el = doc.GetElement(ref)\n        if el is None or not is_pickable(el):\n            continue\n        host = getattr(el, \"Host\", None)\n        if not isinstance(host, Wall):\n            report.append(\"Opening {} is not hosted by a wall - skipped.\"\n                          .format(eid_int(el.Id)))\n            continue\n        if not isinstance(host.Location.Curve, Line):\n            report.append(\"Wall {} is curved - not supported.\"\n                          .format(eid_int(host.Id)))\n            continue\n        if not isinstance(el.Location, LocationPoint):\n            continue\n        key = eid_int(host.Id)\n        if key not in groups:\n            groups[key] = (host, [])\n        groups[key][1].append(el)\n\n    if not groups:\n        return [dims, report + [\"No windows selected.\"]]\n\n    dim_type = find_dimension_type()\n    if DIM_TYPE_NAME and dim_type is None:\n        report.append(\"Dimension type '{}' not found - using the default.\"\n                      .format(DIM_TYPE_NAME))\n\n    TransactionManager.Instance.EnsureInTransaction(doc)\n    try:\n        for host, openings in groups.values():\n            try:\n                dims.extend(dimension_wall(host, openings, dim_type, report))\n            except Exception as ex:\n                report.append(\"Wall {}: failed - {}\".format(\n                    eid_int(host.Id), ex))\n    finally:\n        TransactionManager.Instance.TransactionTaskDone()\n\n    return [dims, report]\n\n\ndef mark_graph_for_rerun():\n    \"\"\"Flag every node in the graph as changed so the NEXT click of Run\n    executes this script again.\n\n    Dynamo only re-executes nodes whose inputs changed; without this, a second\n    Run with the same Run/Offset/Type values reuses the cached result and never\n    prompts for windows. The graph is in Manual mode, so this doesn't trigger\n    a run by itself - it just makes the next Run start a fresh pick.\n    \"\"\"\n    try:\n        clr.AddReference('DynamoRevitDS')\n        from Dynamo.Applications import DynamoRevit\n        try:\n            model = DynamoRevit.RevitDynamoModel\n        except Exception:\n            model = DynamoRevit().RevitDynamoModel\n        workspace = model.CurrentWorkspace\n        for node in workspace.Nodes:\n            node.MarkNodeAsModified(True)\n    except Exception:\n        pass  # e.g. running outside Dynamo for Revit - nothing to reset\n\n\ntry:\n    OUT = main()\nexcept Exception:\n    OUT = [[], [traceback.format_exc()]]\nfinally:\n    mark_graph_for_rerun()\n",
+      "Code": "# ============================================================================\n# Revit Window Auto-Dimension - dimension between windows in plan views\n# ----------------------------------------------------------------------------\n# Paste this entire file into a single Dynamo \"Python Script\" node, or open\n# the ready-made WindowAutoDimension.dyn in the same folder.\n#\n# Engine: CPython3 (Dynamo 2.6+ / Revit 2022+ default). Also runs unmodified\n# on the legacy IronPython2 engine.\n#\n# What it does:\n#   1. Prompts you to click windows (and/or doors) in the active plan view.\n#      Click as many as you like, then press \"Finish\" on the Options Bar\n#      (or Enter). Esc cancels.\n#   2. Groups the picked openings by their host wall. For each host wall it\n#      dimensions the solid wall BETWEEN the openings (window widths are\n#      not dimensioned), placed on one line outside the wall's exterior face:\n#\n#        outer face of the perpendicular wall -> first jamb of opening 1\n#        last jamb of opening 1 -> first jamb of opening 2 ... (etc.)\n#        last jamb of last opening -> outer face of the perpendicular wall\n#\n#      Each gap is its own dimension (Revit can't leave gaps in one string),\n#      all lined up so they read as a single string.\n#\n#      \"Perpendicular wall\" = the external corner wall at each end of the\n#      host wall: of the walls visible in the view that run perpendicular to\n#      the host wall and meet it, the one furthest out on each side. Interior\n#      walls that butt into the host wall part-way along (robes, partitions)\n#      are ignored. The string snaps to that wall's EXTERIOR face (its\n#      Finish 2 / outside layer, from the wall's orientation) - the external\n#      corner of the building, or the brick face at a step in the facade.\n#      If no such wall is found on a side, the host wall's own end face is\n#      used instead.\n#\n#   Jambs are taken from the opening cut in the host wall itself (the wall\n#   faces on each side of the rough/masonry opening), so the string snaps to\n#   real, stable wall geometry. If an opening has no cut faces (e.g. a\n#   family that doesn't cut the wall), its centreline reference is used.\n#\n# Inputs:\n#   IN[0] Boolean  Run            - set True and run the graph to start picking.\n#   IN[1] Number   Offset (mm)    - distance of the dimension line from the\n#                                   host wall's exterior face (model mm).\n#                                   Default 1000.\n#   IN[2] String   Dimension Type - name of a linear dimension type to use.\n#                                   Leave blank to use the project default.\n#\n# Output (OUT): [created Dimension elements, report lines]\n# ============================================================================\n\nimport clr\nimport traceback\n\nclr.AddReference('RevitAPI')\nclr.AddReference('RevitAPIUI')\nclr.AddReference('RevitServices')\n\nfrom Autodesk.Revit.DB import (\n    FilteredElementCollector, Wall, LocationCurve, LocationPoint, Line, XYZ,\n    Options, Solid, PlanarFace, GeometryInstance, ReferenceArray,\n    DimensionType, DimensionStyleType, BuiltInCategory, BuiltInParameter,\n    FamilyInstanceReferenceType, UnitUtils, ViewPlan, ViewType\n)\nfrom Autodesk.Revit.UI.Selection import ObjectType\nfrom Autodesk.Revit.Exceptions import OperationCanceledException\nfrom RevitServices.Persistence import DocumentManager\nfrom RevitServices.Transactions import TransactionManager\n\n# ----------------------------------------------------------------------------\n# Environment / inputs\n# ----------------------------------------------------------------------------\n\ndoc = DocumentManager.Instance.CurrentDBDocument\nuidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument\nview = uidoc.ActiveView\n\n\ndef _in(index, default):\n    try:\n        value = IN[index]\n    except (NameError, IndexError):\n        return default\n    return default if value is None else value\n\n\nRUN = bool(_in(0, True))\nOFFSET_MM = float(_in(1, 1000.0))\nDIM_TYPE_NAME = str(_in(2, \"\")).strip()\n\n# Categories that can be picked. Doors are accepted too, since they sit in\n# the same wall and are usually part of the same dimension string.\nPICKABLE_CATEGORIES = (BuiltInCategory.OST_Windows, BuiltInCategory.OST_Doors)\n\n\n# ----------------------------------------------------------------------------\n# Small helpers\n# ----------------------------------------------------------------------------\n\ndef mm(value):\n    \"\"\"Millimetres -> Revit internal feet, across old/new unit APIs.\"\"\"\n    try:\n        from Autodesk.Revit.DB import UnitTypeId\n        return UnitUtils.ConvertToInternalUnits(value, UnitTypeId.Millimeters)\n    except Exception:\n        from Autodesk.Revit.DB import DisplayUnitType\n        return UnitUtils.ConvertToInternalUnits(\n            value, DisplayUnitType.DUT_MILLIMETERS)\n\n\nTOL_SAME = mm(1.0)       # two references closer than this are duplicates\nTOL_SEARCH = mm(100.0)   # slack when matching faces / walls to openings\n\n\ndef eid_int(element_id):\n    try:\n        return element_id.Value            # Revit 2024+\n    except AttributeError:\n        return element_id.IntegerValue     # older versions\n\n\ndef is_pickable(el):\n    cat = el.Category\n    if cat is None:\n        return False\n    for bic in PICKABLE_CATEGORIES:\n        try:\n            if cat.BuiltInCategory == bic:  # Revit 2023+\n                return True\n        except AttributeError:\n            if eid_int(cat.Id) == int(bic):\n                return True\n    return False\n\n\ndef flat(v):\n    return XYZ(v.X, v.Y, 0)\n\n\ndef along(point, origin, direction):\n    \"\"\"Signed distance of point from origin, measured along direction.\"\"\"\n    return point.Subtract(origin).DotProduct(direction)\n\n\ndef type_name(element_type):\n    p = element_type.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM)\n    return p.AsString() if p is not None else \"\"\n\n\ndef geometry_options():\n    opts = Options()\n    opts.ComputeReferences = True\n    opts.IncludeNonVisibleObjects = False\n    opts.View = view\n    return opts\n\n\ndef planar_faces(element):\n    \"\"\"All planar faces (with references) of an element in the active view.\"\"\"\n    faces = []\n    geo = element.get_Geometry(geometry_options())\n    if geo is None:\n        return faces\n    solids = []\n    for g in geo:\n        if isinstance(g, Solid):\n            solids.append(g)\n        elif isinstance(g, GeometryInstance):\n            for gi in g.GetInstanceGeometry():\n                if isinstance(gi, Solid):\n                    solids.append(gi)\n    for solid in solids:\n        if solid.Volume <= 0:\n            continue\n        for f in solid.Faces:\n            if isinstance(f, PlanarFace) and f.Reference is not None:\n                faces.append(f)\n    return faces\n\n\ndef faces_across(element, origin, direction):\n    \"\"\"Faces whose normal is parallel to direction.\n\n    Returns a list of (position along direction, sign of normal, reference).\n    sign > 0 means the face points towards +direction.\n    \"\"\"\n    result = []\n    for f in planar_faces(element):\n        dot = f.FaceNormal.DotProduct(direction)\n        if abs(dot) > 0.999:\n            result.append((along(f.Origin, origin, direction),\n                           1 if dot > 0 else -1, f.Reference))\n    return result\n\n\ndef find_dimension_type():\n    if not DIM_TYPE_NAME:\n        return None\n    for dt in FilteredElementCollector(doc).OfClass(DimensionType):\n        try:\n            if dt.StyleType != DimensionStyleType.Linear:\n                continue\n        except Exception:\n            pass\n        if type_name(dt) == DIM_TYPE_NAME:\n            return dt\n    return None\n\n\n# ----------------------------------------------------------------------------\n# Core\n# ----------------------------------------------------------------------------\n\ndef opening_span(opening, origin, direction):\n    \"\"\"(min, centre, max) of an opening's bounding box along direction.\"\"\"\n    centre = along(opening.Location.Point, origin, direction)\n    bb = opening.get_BoundingBox(None)\n    if bb is None:\n        return centre, centre, centre\n    values = [along(XYZ(x, y, origin.Z), origin, direction)\n              for x in (bb.Min.X, bb.Max.X) for y in (bb.Min.Y, bb.Max.Y)]\n    return min(values), centre, max(values)\n\n\ndef jamb_references(opening, host_faces, origin, direction, report):\n    \"\"\"References for the two jambs of an opening, as (position, reference).\"\"\"\n    lo, centre, hi = opening_span(opening, origin, direction)\n    # Low-side jamb: wall face that points INTO the opening (+direction).\n    left = [(p, r) for p, s, r in host_faces\n            if s > 0 and lo - TOL_SEARCH <= p < centre]\n    # High-side jamb: wall face that points INTO the opening (-direction).\n    right = [(p, r) for p, s, r in host_faces\n             if s < 0 and centre < p <= hi + TOL_SEARCH]\n    if left and right:\n        # Tightest faces = the actual opening in the wall.\n        return [max(left, key=lambda t: t[0]), min(right, key=lambda t: t[0])]\n\n    report.append(\"Opening {} does not cut its host wall - dimensioned to its \"\n                  \"centreline instead.\".format(eid_int(opening.Id)))\n    refs = opening.GetReferences(FamilyInstanceReferenceType.CenterLeftRight)\n    if refs is not None and refs.Count > 0:\n        return [(centre, refs[0])]\n    report.append(\"Opening {} has no usable reference - skipped.\"\n                  .format(eid_int(opening.Id)))\n    return []\n\n\ndef perpendicular_walls(host, origin, direction, normal):\n    \"\"\"Walls in the view that run perpendicular to host and meet it.\n\n    Returns a list of (position along host direction, wall).\n    \"\"\"\n    host_line = host.Location.Curve\n    s0 = along(host_line.GetEndPoint(0), origin, direction)\n    s1 = along(host_line.GetEndPoint(1), origin, direction)\n    s_min, s_max = min(s0, s1), max(s0, s1)\n    host_half = host.Width / 2.0\n\n    result = []\n    walls = FilteredElementCollector(doc, view.Id).OfClass(Wall) \\\n        .WhereElementIsNotElementType()\n    for w in walls:\n        if eid_int(w.Id) == eid_int(host.Id):\n            continue\n        loc = w.Location\n        if not isinstance(loc, LocationCurve) or not isinstance(loc.Curve, Line):\n            continue\n        line = loc.Curve\n        if abs(flat(line.Direction).Normalize().DotProduct(direction)) > 0.01:\n            continue  # not perpendicular\n        p0, p1 = line.GetEndPoint(0), line.GetEndPoint(1)\n        pos = along(p0, origin, direction)\n        reach = w.Width / 2.0 + TOL_SEARCH\n        if pos < s_min - reach or pos > s_max + reach:\n            continue  # beyond the ends of the host wall\n        n0, n1 = along(p0, origin, normal), along(p1, origin, normal)\n        slack = host_half + w.Width / 2.0 + TOL_SEARCH\n        if min(n0, n1) > slack or max(n0, n1) < -slack:\n            continue  # doesn't touch the host wall\n        result.append((pos, w))\n    return result\n\n\ndef dimension_wall(host, openings, dim_type, report):\n    line = host.Location.Curve\n    origin = line.GetEndPoint(0)\n    direction = flat(line.Direction).Normalize()\n    exterior = flat(host.Orientation).Normalize()\n\n    host_faces = faces_across(host, origin, direction)\n\n    # --- Opening jambs --------------------------------------------------\n    # One (low jamb, high jamb) pair per opening, in order along the wall.\n    openings_jambs = []\n    for o in sorted(openings,\n                    key=lambda e: along(e.Location.Point, origin, direction)):\n        jambs = jamb_references(o, host_faces, origin, direction, report)\n        if jambs:\n            openings_jambs.append((jambs[0], jambs[-1]))\n    if not openings_jambs:\n        report.append(\"Wall {}: nothing to dimension.\".format(eid_int(host.Id)))\n        return []\n    first = openings_jambs[0][0][0]\n    last = openings_jambs[-1][1][0]\n\n    # --- End references: external corner walls (or host wall ends) -------\n    # Take the OUTERMOST perpendicular wall on each side, so interior walls\n    # that butt into the host wall between the corners are skipped.\n    perp = perpendicular_walls(host, origin, direction, exterior)\n    before = [t for t in perp if t[0] < first]\n    after = [t for t in perp if t[0] > last]\n\n    def outer_face(wall, sign, pick):\n        faces = [(p, r) for p, s, r in faces_across(wall, origin, direction)\n                 if s == sign]\n        return pick(faces, key=lambda t: t[0]) if faces else None\n\n    def exterior_face(wall):\n        # The face on the wall's EXTERIOR side (its Finish 2 / brick face),\n        # as set by the wall's orientation. At an external corner this faces\n        # away from the windows; at a step in the facade it faces towards\n        # them - either way it's the outside face of the building.\n        sign = 1 if flat(wall.Orientation).DotProduct(direction) > 0 else -1\n        return outer_face(wall, sign, max if sign > 0 else min)\n\n    start = None\n    if before:\n        start = exterior_face(min(before, key=lambda t: t[0])[1])\n    if start is None:\n        start = outer_face(host, -1, min)\n        report.append(\"Wall {}: no perpendicular wall before the first \"\n                      \"opening - using the wall end.\".format(eid_int(host.Id)))\n    end = None\n    if after:\n        end = exterior_face(max(after, key=lambda t: t[0])[1])\n    if end is None:\n        end = outer_face(host, 1, max)\n        report.append(\"Wall {}: no perpendicular wall after the last \"\n                      \"opening - using the wall end.\".format(eid_int(host.Id)))\n\n    # --- Gaps BETWEEN openings (window widths are not dimensioned) ------\n    #   start -> low jamb of opening 1\n    #   high jamb of opening 1 -> low jamb of opening 2 ... etc.\n    #   high jamb of last opening -> end\n    gaps = []\n    if start is not None:\n        gaps.append((start, openings_jambs[0][0]))\n    for (_, hi), (lo, _) in zip(openings_jambs, openings_jambs[1:]):\n        gaps.append((hi, lo))\n    if end is not None:\n        gaps.append((openings_jambs[-1][1], end))\n\n    # --- Dimension line, parallel to the wall on its exterior side --------\n    # Every gap dimension sits on the same line, so together they read as\n    # one string with the windows left blank.\n    ext_faces = [along(f.Origin, origin, exterior)\n                 for f in planar_faces(host)\n                 if f.FaceNormal.DotProduct(exterior) > 0.999]\n    ext_face = max(ext_faces) if ext_faces else host.Width / 2.0\n    offset = ext_face + mm(OFFSET_MM)\n    base = origin.Add(exterior.Multiply(offset))\n\n    dims = []\n    for (p0, r0), (p1, r1) in gaps:\n        if abs(p1 - p0) < TOL_SAME:\n            continue  # openings touching / window at the corner\n        ref_array = ReferenceArray()\n        ref_array.Append(r0)\n        ref_array.Append(r1)\n        dim_line = Line.CreateBound(base.Add(direction.Multiply(p0)),\n                                    base.Add(direction.Multiply(p1)))\n        if dim_type is not None:\n            dim = doc.Create.NewDimension(view, dim_line, ref_array, dim_type)\n        else:\n            dim = doc.Create.NewDimension(view, dim_line, ref_array)\n        dims.append(dim)\n    report.append(\"Wall {}: created {} dimensions between openings.\".format(\n        eid_int(host.Id), len(dims)))\n    return dims\n\n\ndef main():\n    report = []\n    dims = []\n\n    if not RUN:\n        return [dims, [\"Set Run to True and run the graph to start.\"]]\n    if not isinstance(view, ViewPlan) or view.ViewType not in (\n            ViewType.FloorPlan, ViewType.CeilingPlan, ViewType.AreaPlan,\n            ViewType.EngineeringPlan):\n        return [dims, [\"Open a floor plan view and run again.\"]]\n\n    try:\n        picked = uidoc.Selection.PickObjects(\n            ObjectType.Element,\n            \"Click the windows to dimension, then press Finish (Esc to cancel)\")\n    except OperationCanceledException:\n        return [dims, [\"Selection cancelled.\"]]\n\n    # Group openings by host wall.\n    groups = {}\n    for ref in picked:\n        el = doc.GetElement(ref)\n        if el is None or not is_pickable(el):\n            continue\n        host = getattr(el, \"Host\", None)\n        if not isinstance(host, Wall):\n            report.append(\"Opening {} is not hosted by a wall - skipped.\"\n                          .format(eid_int(el.Id)))\n            continue\n        if not isinstance(host.Location.Curve, Line):\n            report.append(\"Wall {} is curved - not supported.\"\n                          .format(eid_int(host.Id)))\n            continue\n        if not isinstance(el.Location, LocationPoint):\n            continue\n        key = eid_int(host.Id)\n        if key not in groups:\n            groups[key] = (host, [])\n        groups[key][1].append(el)\n\n    if not groups:\n        return [dims, report + [\"No windows selected.\"]]\n\n    dim_type = find_dimension_type()\n    if DIM_TYPE_NAME and dim_type is None:\n        report.append(\"Dimension type '{}' not found - using the default.\"\n                      .format(DIM_TYPE_NAME))\n\n    TransactionManager.Instance.EnsureInTransaction(doc)\n    try:\n        for host, openings in groups.values():\n            try:\n                dims.extend(dimension_wall(host, openings, dim_type, report))\n            except Exception as ex:\n                report.append(\"Wall {}: failed - {}\".format(\n                    eid_int(host.Id), ex))\n    finally:\n        TransactionManager.Instance.TransactionTaskDone()\n\n    return [dims, report]\n\n\ndef mark_graph_for_rerun():\n    \"\"\"Flag every node in the graph as changed so the NEXT click of Run\n    executes this script again.\n\n    Dynamo only re-executes nodes whose inputs changed; without this, a second\n    Run with the same Run/Offset/Type values reuses the cached result and never\n    prompts for windows. The graph is in Manual mode, so this doesn't trigger\n    a run by itself - it just makes the next Run start a fresh pick.\n    \"\"\"\n    try:\n        clr.AddReference('DynamoRevitDS')\n        from Dynamo.Applications import DynamoRevit\n        try:\n            model = DynamoRevit.RevitDynamoModel\n        except Exception:\n            model = DynamoRevit().RevitDynamoModel\n        workspace = model.CurrentWorkspace\n        for node in workspace.Nodes:\n            node.MarkNodeAsModified(True)\n    except Exception:\n        pass  # e.g. running outside Dynamo for Revit - nothing to reset\n\n\ntry:\n    OUT = main()\nexcept Exception:\n    OUT = [[], [traceback.format_exc()]]\nfinally:\n    mark_graph_for_rerun()\n",
       "Engine": "CPython3",
       "VariableInputPorts": true,
-      "Id": "6e439097bf3c4001b8f42cf3c61e9d82",
+      "Id": "745ab0b268d04569b8c406608d40c775",
       "Inputs": [
         {
-          "Id": "3d60eef0795d44c48b4330a5131813cc",
+          "Id": "463ce6da97344a84ac9424ed6dbbf321",
           "Name": "IN[0]",
           "Description": "Input #0",
           "UsingDefaultValue": false,
@@ -117,7 +117,7 @@
           "KeepListStructure": false
         },
         {
-          "Id": "daa86938e66b410bad3c3991611dcf1e",
+          "Id": "7c4be364fc3f470398423a8f0d58c149",
           "Name": "IN[1]",
           "Description": "Input #1",
           "UsingDefaultValue": false,
@@ -126,7 +126,7 @@
           "KeepListStructure": false
         },
         {
-          "Id": "af946e3593d24735bd2a95e34ce2e71d",
+          "Id": "9d0c10d29bca4cdeb38147d6e443e7d6",
           "Name": "IN[2]",
           "Description": "Input #2",
           "UsingDefaultValue": false,
@@ -137,7 +137,7 @@
       ],
       "Outputs": [
         {
-          "Id": "6f0731e1be6f47a7bc897b54556b5125",
+          "Id": "1095f19d85604626a52cdcf2a7e90b55",
           "Name": "OUT",
           "Description": "Result of the python script",
           "UsingDefaultValue": false,
@@ -152,10 +152,10 @@
     {
       "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
       "NodeType": "ExtensionNode",
-      "Id": "e6c4791458e24a17ae587e645c4c67ca",
+      "Id": "1c9ae30bf52b48b58c7416aad7a37264",
       "Inputs": [
         {
-          "Id": "14bb4f9e1ea84deb8c8a29d0115b4faa",
+          "Id": "f89c341f464f417280a6a5a9f6a3bf76",
           "Name": "",
           "Description": "Node to show output from",
           "UsingDefaultValue": false,
@@ -166,7 +166,7 @@
       ],
       "Outputs": [
         {
-          "Id": "627b58f82af3474d852e39544f9aacd8",
+          "Id": "651733d263dc4388a5d3c777dac4b3db",
           "Name": "",
           "Description": "Node output",
           "UsingDefaultValue": false,
@@ -181,27 +181,27 @@
   ],
   "Connectors": [
     {
-      "Start": "5dd1cbcafb734cb9bebfb38c694258dd",
-      "End": "3d60eef0795d44c48b4330a5131813cc",
-      "Id": "80fb9b94119a47b9a3dc142eacc0e842",
+      "Start": "53e6e4506c93456db88fc7be9e6bd171",
+      "End": "463ce6da97344a84ac9424ed6dbbf321",
+      "Id": "7e21412ae24c4949b496aeb6ccabab62",
       "IsHidden": "False"
     },
     {
-      "Start": "aa0a6c6efd05481386abda616b315bb1",
-      "End": "daa86938e66b410bad3c3991611dcf1e",
-      "Id": "4404b6add604425d8961c8c4d3c1040d",
+      "Start": "5dbb30cdc346451ea9359f93409daf04",
+      "End": "7c4be364fc3f470398423a8f0d58c149",
+      "Id": "7fe200fcb3814401bcbdb834186d702c",
       "IsHidden": "False"
     },
     {
-      "Start": "a5feec27c7a748f8b0c3ac510a62fcad",
-      "End": "af946e3593d24735bd2a95e34ce2e71d",
-      "Id": "cec90b2ca3274f53ae58e67bba09d6ea",
+      "Start": "c17fdd26eb0b4ee0918f4256452ca04e",
+      "End": "9d0c10d29bca4cdeb38147d6e443e7d6",
+      "Id": "ffe341732ab44bc5ac9ef59f132e2acd",
       "IsHidden": "False"
     },
     {
-      "Start": "6f0731e1be6f47a7bc897b54556b5125",
-      "End": "14bb4f9e1ea84deb8c8a29d0115b4faa",
-      "Id": "ac30b71fbe5345e095d73e1081eceb5a",
+      "Start": "1095f19d85604626a52cdcf2a7e90b55",
+      "End": "f89c341f464f417280a6a5a9f6a3bf76",
+      "Id": "e132561696914948ad0dd6b41f3c85d1",
       "IsHidden": "False"
     }
   ],
@@ -242,7 +242,7 @@
     "ConnectorPins": [],
     "NodeViews": [
       {
-        "Id": "eebdd60a67264903a51e789745a94b58",
+        "Id": "7bbd647cacde43c587c120cd72dba8c7",
         "Name": "Run",
         "IsSetAsInput": true,
         "IsSetAsOutput": false,
@@ -252,7 +252,7 @@
         "Y": 0.0
       },
       {
-        "Id": "b6cc6968182b4189890ca2d2b2f4f114",
+        "Id": "d36ab81bb8ef4d8e998d30efb0adfb16",
         "Name": "Offset from wall (mm)",
         "IsSetAsInput": true,
         "IsSetAsOutput": false,
@@ -262,7 +262,7 @@
         "Y": 130.0
       },
       {
-        "Id": "5fe389aa759d4b44995d90711a6413a4",
+        "Id": "576cde22c9bc4070b47c614509d5c8a3",
         "Name": "Dimension Type (blank = default)",
         "IsSetAsInput": true,
         "IsSetAsOutput": false,
@@ -272,7 +272,7 @@
         "Y": 260.0
       },
       {
-        "Id": "6e439097bf3c4001b8f42cf3c61e9d82",
+        "Id": "745ab0b268d04569b8c406608d40c775",
         "Name": "Window Auto-Dimension",
         "IsSetAsInput": false,
         "IsSetAsOutput": false,
@@ -282,7 +282,7 @@
         "Y": 110.0
       },
       {
-        "Id": "e6c4791458e24a17ae587e645c4c67ca",
+        "Id": "1c9ae30bf52b48b58c7416aad7a37264",
         "Name": "Result",
         "IsSetAsInput": false,
         "IsSetAsOutput": false,
