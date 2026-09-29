@@ -36,7 +36,7 @@ Doors get specific tag types depending on their **family or type name**
 
 | Door name contains | Tag(s) | e.g. |
 |---|---|---|
-| `Entry` | **two tags**: GH-AN-Tag_Door : **Door Mark (H x W, Construction Type)**, running along the wall and offset 600 mm to the door's facing side; plus GH-AN-Tag_Door : **Internal**, square to the wall, at the door | Entry Door ... |
+| `Entry` | **Plans: two tags**: GH-AN-Tag_Door : **Door Mark (H x W, Construction Type)**, running along the wall and offset 600 mm to the door's facing side; plus GH-AN-Tag_Door : **Internal**, square to the wall, at the door. **Elevations/sections: Door Mark only** (no Internal tag). | Entry Door ... |
 | `Robe` | GH-AN-Tag_Door : **Robe Door** | Robe Sliding Door : Smart - 2100H 2 x 520 |
 | `Opening` | GH-AN-Tag_Door : **Bulkhead Height** | Door - Opening : Opening - 2200H |
 | `Internal` | GH-AN-Tag_Door : **Internal** | Internal Timber Flush Door_Single : 2040 x 870 |
@@ -71,7 +71,8 @@ Doors get specific tag types depending on their **family or type name**
   script. Each row is `("text in door name", [tags])`, and each tag is
   `("tag family", "tag type", orientation, offset mm)`. Orientation is
   `None` (usual rule), `"along"` (runs with the wall) or `"across"`
-  (square to the wall).
+  (square to the wall). Add `"plan only"` as a 5th item to leave that tag
+  off elevations/sections, as on the Entry door's Internal tag.
 - **If a tag type isn't loaded:** if it's a door's first tag, the default
   door tag is used instead. If it's the second, it's skipped. Either way
   the report lists the missing type.
@@ -137,7 +138,7 @@ door leaf**, like the `820` tag on a robe door.
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-14
+   Tag Doors & Windows script version 2026-09-29 tag-15
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.

@@ -72,7 +72,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-14"
+SCRIPT_VERSION = "2026-09-29 tag-15"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -92,11 +92,13 @@ TAG_CATEGORIES = {
 #                (plan views only; elsewhere tags are horizontal)
 #   offset       moves the tag this far out from the door, towards the
 #                side it faces, so two tags don't sit on top of each other
+#   "plan only"  (optional 5th item) = only add this tag in plan views,
+#                not in elevations / sections
 DOOR_TAG_RULES = [
     ("Entry", [
         ("GH-AN-Tag_Door", "Door Mark (H x W, Construction Type)",
          "along", 600),
-        ("GH-AN-Tag_Door", "Internal", "across", 0),
+        ("GH-AN-Tag_Door", "Internal", "across", 0, "plan only"),
     ]),
     ("Robe",     [("GH-AN-Tag_Door", "Robe Door", None, 0)]),
     ("Opening",  [("GH-AN-Tag_Door", "Bulkhead Height", None, 0)]),
@@ -653,7 +655,11 @@ def tag_picked(view, add_leader, skip_tagged, report):
             # No rule: one default tag (Tag By Category), usual orientation.
             specs = rule[1] if rule is not None else [(None, None, None, 0)]
             made = 0
-            for i, (family, tag_type, mode, offset_mm) in enumerate(specs):
+            for i, spec in enumerate(specs):
+                family, tag_type, mode, offset_mm = spec[:4]
+                if "plan only" in spec[4:] \
+                        and not isinstance(view, ViewPlan):
+                    continue    # e.g. no Internal tag on elevations
                 tag_type_id = None
                 if kind == "window":
                     tag_type_id = window_type_id     # plan / elevation type
