@@ -1,13 +1,16 @@
 # Revit Window Auto-Dimension
 
 A Dynamo tool for Revit that dimensions between windows in plan views. Click
-the windows in a wall and it places one continuous dimension string outside
-the wall:
+the windows in a wall and it dimensions the solid wall **between** the
+windows, lined up outside the wall. The window widths themselves are not
+dimensioned:
 
 ```
-outer face of perpendicular wall ─ jamb ─ jamb ─ jamb ─ jamb ─ outer face of perpendicular wall
-      (e.g. 950)                   (1610)             (1550)
+corner ├──950──┤ [window] ├──1610──┤ [window] ├──1550──┤ corner
 ```
+
+Revit can't leave a gap in a single dimension string, so each gap is its own
+dimension. They all sit on the same line, so they read as one string.
 
 The string ends on the **outer face of the walls that run perpendicular to
 the wall hosting the windows**. For end walls this is the external corner of
@@ -39,14 +42,14 @@ No third-party Dynamo packages are required.
 4. Click **Run**. Revit asks you to pick elements:
    - Click each window you want dimensioned. Doors are accepted too.
    - Press **Finish** on the Options Bar, or press Enter. Esc cancels.
-5. One dimension string is created per host wall. The **Result** Watch node
+5. The gap dimensions are created for each host wall. The **Result** Watch node
    lists the new dimensions and a short report.
 
 The graph is set to **Manual**, so each click of Run starts a new pick
 session. Press Ctrl+Z in Revit to undo a run.
 
 You can pick windows in several different walls at once. Each wall gets its
-own string.
+own line of dimensions.
 
 ---
 

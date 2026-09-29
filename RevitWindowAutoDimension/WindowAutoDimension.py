@@ -12,13 +12,15 @@
 #      Click as many as you like, then press "Finish" on the Options Bar
 #      (or Enter). Esc cancels.
 #   2. Groups the picked openings by their host wall. For each host wall it
-#      builds ONE continuous dimension string, placed outside the wall's
-#      exterior face, that runs:
+#      dimensions the solid wall BETWEEN the openings (window widths are
+#      not dimensioned), placed on one line outside the wall's exterior face:
 #
-#        outer face of the perpendicular wall before the first opening
-#          -> jamb, jamb of opening 1
-#          -> jamb, jamb of opening 2 ... (etc.)
-#          -> outer face of the perpendicular wall after the last opening
+#        outer face of the perpendicular wall -> first jamb of opening 1
+#        last jamb of opening 1 -> first jamb of opening 2 ... (etc.)
+#        last jamb of last opening -> outer face of the perpendicular wall
+#
+#      Each gap is its own dimension (Revit can't leave gaps in one string),
+#      all lined up so they read as a single string.
 #
 #      "Perpendicular wall" = the external corner wall at each end of the
 #      host wall: of the walls visible in the view that run perpendicular to
@@ -285,17 +287,18 @@ def dimension_wall(host, openings, dim_type, report):
     host_faces = faces_across(host, origin, direction)
 
     # --- Opening jambs --------------------------------------------------
-    points = []
-    spans = []
+    # One (low jamb, high jamb) pair per opening, in order along the wall.
+    openings_jambs = []
     for o in sorted(openings,
                     key=lambda e: along(e.Location.Point, origin, direction)):
         jambs = jamb_references(o, host_faces, origin, direction, report)
-        points.extend(jambs)
-        spans.extend(p for p, _ in jambs)
-    if not points:
+        if jambs:
+            openings_jambs.append((jambs[0], jambs[-1]))
+    if not openings_jambs:
         report.append("Wall {}: nothing to dimension.".format(eid_int(host.Id)))
-        return None
-    first, last = min(spans), max(spans)
+        return []
+    first = openings_jambs[0][0][0]
+    last = openings_jambs[-1][1][0]
 
     # --- End references: external corner walls (or host wall ends) -------
     # Take the OUTERMOST perpendicular wall on each side, so interior walls
@@ -324,42 +327,45 @@ def dimension_wall(host, openings, dim_type, report):
         report.append("Wall {}: no perpendicular wall after the last "
                       "opening - using the wall end.".format(eid_int(host.Id)))
 
-    for extra in (start, end):
-        if extra is not None:
-            points.append(extra)
-
-    # --- Sort, de-duplicate, build the ReferenceArray --------------------
-    points.sort(key=lambda t: t[0])
-    ref_array = ReferenceArray()
-    kept = []
-    for pos, ref in points:
-        if kept and abs(pos - kept[-1]) < TOL_SAME:
-            continue
-        ref_array.Append(ref)
-        kept.append(pos)
-    if ref_array.Size < 2:
-        report.append("Wall {}: fewer than two references - skipped."
-                      .format(eid_int(host.Id)))
-        return None
+    # --- Gaps BETWEEN openings (window widths are not dimensioned) ------
+    #   start -> low jamb of opening 1
+    #   high jamb of opening 1 -> low jamb of opening 2 ... etc.
+    #   high jamb of last opening -> end
+    gaps = []
+    if start is not None:
+        gaps.append((start, openings_jambs[0][0]))
+    for (_, hi), (lo, _) in zip(openings_jambs, openings_jambs[1:]):
+        gaps.append((hi, lo))
+    if end is not None:
+        gaps.append((openings_jambs[-1][1], end))
 
     # --- Dimension line, parallel to the wall on its exterior side --------
+    # Every gap dimension sits on the same line, so together they read as
+    # one string with the windows left blank.
     ext_faces = [along(f.Origin, origin, exterior)
                  for f in planar_faces(host)
                  if f.FaceNormal.DotProduct(exterior) > 0.999]
     ext_face = max(ext_faces) if ext_faces else host.Width / 2.0
     offset = ext_face + mm(OFFSET_MM)
     base = origin.Add(exterior.Multiply(offset))
-    p_start = base.Add(direction.Multiply(kept[0]))
-    p_end = base.Add(direction.Multiply(kept[-1]))
-    dim_line = Line.CreateBound(p_start, p_end)
 
-    if dim_type is not None:
-        dim = doc.Create.NewDimension(view, dim_line, ref_array, dim_type)
-    else:
-        dim = doc.Create.NewDimension(view, dim_line, ref_array)
-    report.append("Wall {}: created dimension with {} segments.".format(
-        eid_int(host.Id), ref_array.Size - 1))
-    return dim
+    dims = []
+    for (p0, r0), (p1, r1) in gaps:
+        if abs(p1 - p0) < TOL_SAME:
+            continue  # openings touching / window at the corner
+        ref_array = ReferenceArray()
+        ref_array.Append(r0)
+        ref_array.Append(r1)
+        dim_line = Line.CreateBound(base.Add(direction.Multiply(p0)),
+                                    base.Add(direction.Multiply(p1)))
+        if dim_type is not None:
+            dim = doc.Create.NewDimension(view, dim_line, ref_array, dim_type)
+        else:
+            dim = doc.Create.NewDimension(view, dim_line, ref_array)
+        dims.append(dim)
+    report.append("Wall {}: created {} dimensions between openings.".format(
+        eid_int(host.Id), len(dims)))
+    return dims
 
 
 def main():
@@ -414,9 +420,7 @@ def main():
     try:
         for host, openings in groups.values():
             try:
-                dim = dimension_wall(host, openings, dim_type, report)
-                if dim is not None:
-                    dims.append(dim)
+                dims.extend(dimension_wall(host, openings, dim_type, report))
             except Exception as ex:
                 report.append("Wall {}: failed - {}".format(
                     eid_int(host.Id), ex))
