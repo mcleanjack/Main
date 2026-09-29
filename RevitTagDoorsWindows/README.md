@@ -53,7 +53,9 @@ Windows always get the default window tag.
 - The report shows which types were used, e.g.
   `Door tag types used: Bulkhead Height x2, Internal x5, Robe Door x3`.
 
-### Tag orientation follows the wall
+### Tag orientation follows the wall (plan views only)
+
+In **plan views** (floor, ceiling, structural and area plans):
 
 | Window / door is in a wall running... | Tag |
 |---|---|
@@ -63,7 +65,9 @@ Windows always get the default window tag.
 
 - **Doors with `Robe` in their name are excluded.** They always get a
   horizontal tag.
-- It uses the view's own axes, so it also works in elevations and sections.
+- **In elevations, sections and other views, all tags stay horizontal.**
+- "Across" and "up" are measured against the plan view's own axes, so it
+  works on rotated plans too.
 - To exclude more doors/windows, add words to `ORIENTATION_EXCLUDE` near
   the top of the script, e.g. `["robe", "cavity slider"]`.
 - The report shows the split, e.g.
@@ -83,7 +87,7 @@ Windows always get the default window tag.
 4. Tags appear on every window and door you clicked. The Watch node
    reports, e.g.:
    ```
-   Tag Doors & Windows script version 2026-09-29 tag-5
+   Tag Doors & Windows script version 2026-09-29 tag-6
    Tagged 6 door(s) and 9 window(s).
    2 already tagged in this view, skipped.
    1 clicked element(s) weren't windows or doors, ignored.

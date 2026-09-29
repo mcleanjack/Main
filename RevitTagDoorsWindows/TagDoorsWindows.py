@@ -51,7 +51,7 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import (
     FilteredElementCollector, IndependentTag, Reference, TagMode,
     TagOrientation, LocationPoint, BuiltInCategory, ViewType, XYZ,
-    ElementId, TemporaryViewMode, FamilySymbol, BuiltInParameter
+    ElementId, TemporaryViewMode, FamilySymbol, BuiltInParameter, ViewPlan
 )
 from System.Collections.Generic import List as NetList
 from Autodesk.Revit.UI.Selection import ObjectType
@@ -69,7 +69,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 tag-5"
+SCRIPT_VERSION = "2026-09-29 tag-6"
 
 TAG_CATEGORIES = {
     BuiltInCategory.OST_Doors: "door",
@@ -89,9 +89,9 @@ DOOR_TAG_RULES = [
     ("Internal",          "GH-AN-Tag_Door", "Internal"),
 ]
 
-# Tag orientation follows the host wall: windows / doors in a wall running
-# across the view get a VERTICAL tag, in a wall running up the view a
-# HORIZONTAL tag. Doors / windows whose name contains any of these words
+# Tag orientation follows the host wall (PLAN VIEWS ONLY; elsewhere tags
+# stay horizontal): windows / doors in a wall running across the plan get
+# a VERTICAL tag, in a wall running up the plan a HORIZONTAL tag. Doors / windows whose name contains any of these words
 # are left with the normal horizontal tag.
 ORIENTATION_EXCLUDE = ["robe"]
 
@@ -269,8 +269,11 @@ def wall_direction(element):
 def tag_orientation(element, view):
     """Vertical tag for a window / door in a wall running across the view
     (horizontal), horizontal tag for one in a wall running up the view
-    (vertical). Robe doors, and anything whose wall can't be read, keep
-    the normal horizontal tag."""
+    (vertical). Plan views only: in elevations, sections etc. every tag
+    stays horizontal. Robe doors, and anything whose wall can't be read,
+    keep the normal horizontal tag."""
+    if not isinstance(view, ViewPlan):
+        return TagOrientation.Horizontal
     if any(text in element_name(element) for text in ORIENTATION_EXCLUDE):
         return TagOrientation.Horizontal
     d = wall_direction(element)
