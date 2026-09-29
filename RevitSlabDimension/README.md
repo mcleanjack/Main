@@ -34,6 +34,27 @@ so the two don't affect each other.
 - The dimension is attached to the slab edge faces, so it updates if the
   slab edges move.
 
+### Overall slab edges
+
+By default the string also snaps to the **outermost slab edges** in its
+direction, across **all slabs visible in the view**. That way it
+captures the whole length of the slab, even where your line doesn't
+cross that edge. Example: a porch that sticks out past the part of the
+residence slab the line runs through. Its outer edge is still added, as
+the first point of the string.
+
+- These points come from each slab's own edges, so they're attached like
+  the rest.
+- If the outermost edge is one the line already crosses, nothing extra is
+  added.
+- A jog in a stepped path never gets an overall string of its own.
+- The report says when this happens, e.g.
+  `1 overall slab edge(s) added beyond the line.`
+- To turn it off, wire `False` into `IN[4]`.
+- It uses **every slab visible in the view**. If the view shows more
+  than one building, hide the others (or use a crop region) so their
+  edges aren't treated as the overall extent.
+
 ---
 
 ## 2. Building the graph in Dynamo
@@ -57,9 +78,10 @@ so the two don't affect each other.
 | `IN[1]` | **String** | Dimension type name, e.g. `Linear - 2.5mm Arial`. Blank = default. |
 | `IN[2]` | **Boolean** | `True` deletes the drawn line(s) afterwards. |
 | `IN[3]` | **Boolean** | `True` (default) also picks up Structural Foundation slabs. `False` = Floors only. |
+| `IN[4]` | **Boolean** | `True` (default) also snaps to the **overall** slab edges (see below). `False` = only edges the line crosses. |
 
 Wire `OUT` into a **Watch** node. The first line shows the script version,
-e.g. `Slab Auto-Dimension script version 2026-09-29 slab-1`.
+e.g. `Slab Auto-Dimension script version 2026-09-29 slab-2`.
 
 **Running it again:** just click **Run**. In Manual mode the script flags
 itself to run again next time, so no toggling or re-wiring is needed. Or

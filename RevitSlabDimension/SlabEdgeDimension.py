@@ -34,6 +34,11 @@
 #   IN[2]  Delete the drawn line(s) afterwards (bool). Default False.
 #   IN[3]  Include Structural Foundation slabs (bool). Default True. False
 #          = Floors category only.
+#   IN[4]  Add overall slab edges (bool). Default True: the string also
+#          snaps to the outermost slab edges in its direction, across all
+#          slabs in the view, so it captures the whole length of the slab
+#          even where the line doesn't cross that edge (e.g. a porch that
+#          sticks out). False = only edges the line crosses.
 #
 # Re-running: in Manual run mode the script flags its own node after each
 # run, so every click of Run executes it again (see flag_self_for_rerun).
@@ -74,7 +79,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 slab-1"
+SCRIPT_VERSION = "2026-09-29 slab-2"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: edges closer than this count as one
@@ -408,7 +413,35 @@ def direction_groups(chain):
 # Building the dimension
 # ----------------------------------------------------------------------------
 
-def group_hits(view, axis, members, include_foundations, stats):
+def overall_extremes(view, axis, members, include_foundations):
+    """The outermost slab edges along the axis, across every slab in the
+    view: [(s_min, Reference), (s_max, Reference)], s = distance along the
+    axis measured the same way as the drawn lines. These capture the whole
+    length of the slab even where the line doesn't cross that edge (e.g. a
+    porch that sticks out beyond the part of the slab the line crosses)."""
+    first = members[0]
+    lo = hi = None
+    for slab in collect_slabs(view, include_foundations):
+        for face in slab_faces(slab):
+            n = face.FaceNormal
+            if abs(n.Z) > VERTICAL_TOL:
+                continue
+            n = flat(n)
+            if n.GetLength() < 1e-9:
+                continue
+            if abs(n.Normalize().DotProduct(axis)) < PARALLEL_COS:
+                continue    # not square to the string
+            s = (flat(face.Origin).Subtract(first.a).DotProduct(axis)
+                 + first.s_a)
+            if lo is None or s < lo[0]:
+                lo = (s, face.Reference)
+            if hi is None or s > hi[0]:
+                hi = (s, face.Reference)
+    return [e for e in (lo, hi) if e is not None]
+
+
+def group_hits(view, axis, members, include_foundations, stats,
+               add_overall=False):
     """Every slab edge crossed by any line in the group, as a sorted,
     de-duplicated list of (s, Reference), s = distance along the axis."""
     hits = []
@@ -416,6 +449,14 @@ def group_hits(view, axis, members, include_foundations, stats):
         for t, ref in collect_edge_hits(view, line.a, line.b, axis,
                                         include_foundations, stats):
             hits.append((line.s_a + t, ref))
+    if add_overall and hits:
+        # Only for a run that crosses the slab, so a jog between runs
+        # doesn't get an overall string of its own.
+        for s, ref in overall_extremes(view, axis, members,
+                                       include_foundations):
+            if all(abs(s - h) >= DEDUP_TOL for h, _ in hits):
+                hits.append((s, ref))
+                stats["overall"] += 1
     hits.sort(key=lambda h: h[0])
     deduped = []
     for s, ref in hits:
@@ -425,11 +466,13 @@ def group_hits(view, axis, members, include_foundations, stats):
     return deduped
 
 
-def dimension_group(view, axis, members, dim_type, include_foundations):
+def dimension_group(view, axis, members, dim_type, include_foundations,
+                    add_overall):
     """One dimension string for a group of parallel, connected lines.
     Returns (Dimension or None, message)."""
-    stats = {"slabs": set()}
-    hits = group_hits(view, axis, members, include_foundations, stats)
+    stats = {"slabs": set(), "overall": 0}
+    hits = group_hits(view, axis, members, include_foundations, stats,
+                      add_overall)
     ids = ", ".join(str(line.element.Id) for line in members)
     label = "Line" if len(members) == 1 else "Lines"
     if len(hits) < 2:
@@ -454,8 +497,12 @@ def dimension_group(view, axis, members, dim_type, include_foundations):
     else:
         dim = doc.Create.NewDimension(view, dim_line, refs)
 
-    return dim, ("%s %s: %d slab edges dimensioned across %d slab(s)."
-                 % (label, ids, len(hits), len(stats["slabs"])))
+    msg = ("%s %s: %d slab edges dimensioned across %d slab(s)."
+           % (label, ids, len(hits), len(stats["slabs"])))
+    if stats["overall"]:
+        msg += (" %d overall slab edge(s) added beyond the line."
+                % stats["overall"])
+    return dim, msg
 
 
 # ----------------------------------------------------------------------------
@@ -485,6 +532,7 @@ def main():
                       % dim_type_name)
     delete_line = bool(_in(2, False))
     include_foundations = bool(_in(3, True))
+    add_overall = bool(_in(4, True))
 
     lines = []
     for element in elements:
@@ -505,7 +553,8 @@ def main():
                 made = []
                 for axis, members in direction_groups(chain):
                     dim, msg = dimension_group(view, axis, members, dim_type,
-                                               include_foundations)
+                                               include_foundations,
+                                               add_overall)
                     report.append(msg)
                     if dim is not None:
                         made.append(dim)
