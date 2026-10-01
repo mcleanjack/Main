@@ -62,6 +62,7 @@ from Autodesk.Revit.Exceptions import OperationCanceledException
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
+from System import Decimal
 from System.Collections.Generic import List as NetList
 from System.Windows.Forms import (
     Form, Label, TextBox, NumericUpDown, Button, RadioButton, GroupBox,
@@ -218,9 +219,9 @@ class SettingsForm(Form):
         lbl.Size = Size(130, 20)
         self.Controls.Add(lbl)
         self.start_box = NumericUpDown()
-        self.start_box.Minimum = 0
-        self.start_box.Maximum = 99999
-        self.start_box.Value = 1
+        self.start_box.Minimum = Decimal(0)
+        self.start_box.Maximum = Decimal(99999)
+        self.start_box.Value = Decimal(1)
         self.start_box.Location = Point(150, y)
         self.start_box.Size = Size(100, 22)
         self.Controls.Add(self.start_box)
@@ -232,9 +233,9 @@ class SettingsForm(Form):
         lbl.Size = Size(130, 20)
         self.Controls.Add(lbl)
         self.digits_box = NumericUpDown()
-        self.digits_box.Minimum = 1
-        self.digits_box.Maximum = 6
-        self.digits_box.Value = digits
+        self.digits_box.Minimum = Decimal(1)
+        self.digits_box.Maximum = Decimal(6)
+        self.digits_box.Value = Decimal(max(1, min(6, int(digits))))
         self.digits_box.Location = Point(150, y)
         self.digits_box.Size = Size(100, 22)
         self.Controls.Add(self.digits_box)
@@ -291,8 +292,8 @@ class SettingsForm(Form):
         self.CancelButton = cancel
 
     def update_example(self, sender, args):
-        start = int(self.start_box.Value)
-        digits = int(self.digits_box.Value)
+        start = Decimal.ToInt32(self.start_box.Value)
+        digits = Decimal.ToInt32(self.digits_box.Value)
         self.example.Text = "e.g. {0}, {1}, ...".format(
             format_mark(self.prefix_box.Text, start, digits),
             format_mark(self.prefix_box.Text, start + 1, digits))
@@ -376,8 +377,8 @@ try:
             status_message = "Cancelled by user. No changes made."
         else:
             prefix = form.prefix_box.Text
-            start = int(form.start_box.Value)
-            digits = int(form.digits_box.Value)
+            start = Decimal.ToInt32(form.start_box.Value)
+            digits = Decimal.ToInt32(form.digits_box.Value)
             continue_others = bool(form.continue_radio.Checked)
 
             picked = pick_windows_in_order(prefix, start, digits)
