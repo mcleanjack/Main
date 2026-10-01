@@ -62,10 +62,9 @@ from Autodesk.Revit.Exceptions import OperationCanceledException
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-from System import Decimal
 from System.Collections.Generic import List as NetList
 from System.Windows.Forms import (
-    Form, Label, TextBox, NumericUpDown, Button, RadioButton, GroupBox,
+    Form, Label, TextBox, Button, RadioButton, GroupBox,
     DialogResult, FormStartPosition, FormBorderStyle
 )
 from System.Drawing import Point, Size
@@ -81,7 +80,9 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-debug_info = []
+SCRIPT_VERSION = "v3 (text boxes, no NumericUpDown)"
+
+debug_info = ["Script version: " + SCRIPT_VERSION]
 
 
 # ----------------------------------------------------------------------------
@@ -118,6 +119,14 @@ def natural_key(text):
     """Sort 'W.2' before 'W.10'."""
     parts = re.split(r'(\d+)', text or "")
     return [int(s) if s.isdigit() else s.lower() for s in parts]
+
+
+def parse_int(text, default, lo, hi):
+    try:
+        n = int(str(text).strip())
+    except Exception:
+        return default
+    return max(lo, min(hi, n))
 
 
 def format_mark(prefix, number, digits):
@@ -218,10 +227,8 @@ class SettingsForm(Form):
         lbl.Location = Point(15, y + 3)
         lbl.Size = Size(130, 20)
         self.Controls.Add(lbl)
-        self.start_box = NumericUpDown()
-        self.start_box.Minimum = Decimal(0)
-        self.start_box.Maximum = Decimal(99999)
-        self.start_box.Value = Decimal(1)
+        self.start_box = TextBox()
+        self.start_box.Text = "1"
         self.start_box.Location = Point(150, y)
         self.start_box.Size = Size(100, 22)
         self.Controls.Add(self.start_box)
@@ -232,10 +239,8 @@ class SettingsForm(Form):
         lbl.Location = Point(15, y + 3)
         lbl.Size = Size(130, 20)
         self.Controls.Add(lbl)
-        self.digits_box = NumericUpDown()
-        self.digits_box.Minimum = Decimal(1)
-        self.digits_box.Maximum = Decimal(6)
-        self.digits_box.Value = Decimal(max(1, min(6, int(digits))))
+        self.digits_box = TextBox()
+        self.digits_box.Text = str(digits)
         self.digits_box.Location = Point(150, y)
         self.digits_box.Size = Size(100, 22)
         self.Controls.Add(self.digits_box)
@@ -245,8 +250,8 @@ class SettingsForm(Form):
         self.example.Size = Size(140, 40)
         self.Controls.Add(self.example)
         self.prefix_box.TextChanged += self.update_example
-        self.start_box.ValueChanged += self.update_example
-        self.digits_box.ValueChanged += self.update_example
+        self.start_box.TextChanged += self.update_example
+        self.digits_box.TextChanged += self.update_example
         self.update_example(None, None)
 
         y += 40
@@ -291,9 +296,15 @@ class SettingsForm(Form):
         self.Controls.Add(cancel)
         self.CancelButton = cancel
 
+    def get_start(self):
+        return parse_int(self.start_box.Text, 1, 0, 99999)
+
+    def get_digits(self):
+        return parse_int(self.digits_box.Text, 2, 1, 6)
+
     def update_example(self, sender, args):
-        start = Decimal.ToInt32(self.start_box.Value)
-        digits = Decimal.ToInt32(self.digits_box.Value)
+        start = self.get_start()
+        digits = self.get_digits()
         self.example.Text = "e.g. {0}, {1}, ...".format(
             format_mark(self.prefix_box.Text, start, digits),
             format_mark(self.prefix_box.Text, start + 1, digits))
@@ -377,8 +388,8 @@ try:
             status_message = "Cancelled by user. No changes made."
         else:
             prefix = form.prefix_box.Text
-            start = Decimal.ToInt32(form.start_box.Value)
-            digits = Decimal.ToInt32(form.digits_box.Value)
+            start = form.get_start()
+            digits = form.get_digits()
             continue_others = bool(form.continue_radio.Checked)
 
             picked = pick_windows_in_order(prefix, start, digits)
