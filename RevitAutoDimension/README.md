@@ -328,7 +328,8 @@ Tips:
 | Fewer than 2 faces hit | No dimension is made for that line/run, and the report says so. That's normal for a jog between runs. |
 | Line not straight / not a line | `FAILED` with a message saying why. |
 | Room not placed or unbounded | That segment has no label. |
-| Rooms in a linked model | Found, as long as the link is loaded. |
+| Rooms in a linked model | Found, as long as the link is loaded. Only main model and **primary** design option rooms in the link are used. |
+| **Design options** | Only rooms in the main model or in a design option **shown in this view** are used. Where two options overlap, names come from the option you see. The view's shown options are worked out from the walls, floors, doors etc. Revit displays in it. The report says how many rooms were ignored, e.g. `Ignored 12 room(s) in design options not shown in this view.` |
 | No room labels at all | The report says `No room found under any segment (placed rooms: N in this model, M in linked models)`. If both are 0, the rooms aren't placed/enclosed or the link isn't loaded. |
 | Wall with no Structure layer | External (Function = Exterior): its outer face only. Otherwise skipped and named in the report, or dimensioned to its core/finished faces if `IN[4] = True`. |
 | Structure layer not bounded by the core | Skipped and named in the report. Fix the wall type's Core Boundary rows (see section 2). |

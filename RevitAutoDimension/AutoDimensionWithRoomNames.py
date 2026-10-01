@@ -97,8 +97,10 @@ from Autodesk.Revit.DB import (
     UV, Reference, ReferenceArray, SubTransaction, HostObjectUtils,
     ShellLayerType, PlanarFace, MaterialFunctionAssignment, WallFunction,
     ViewPlan, PlanViewPlane, DimensionType, DimensionStyleType,
-    BuiltInParameter, BuiltInCategory, RevitLinkInstance
+    BuiltInParameter, BuiltInCategory, RevitLinkInstance,
+    ElementMulticategoryFilter
 )
+from System.Collections.Generic import List as NetList
 from Autodesk.Revit.UI.Selection import ObjectType
 from Autodesk.Revit.Exceptions import OperationCanceledException
 
@@ -114,7 +116,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 rerun-4"
+SCRIPT_VERSION = "2026-10-01 options-1"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -256,6 +258,63 @@ def room_label(room, include_number):
     return name or ""
 
 
+def eid_int(element_id):
+    try:
+        return int(element_id.Value)            # Revit 2024+
+    except AttributeError:
+        return int(element_id.IntegerValue)     # older Revit
+
+
+# Categories used to work out which design options a view is showing.
+OPTION_PROBE_CATEGORIES = [
+    "OST_Walls", "OST_Floors", "OST_Doors", "OST_Windows", "OST_Roofs",
+    "OST_Rooms", "OST_Ceilings", "OST_Stairs", "OST_Railings",
+    "OST_Columns", "OST_StructuralColumns", "OST_Furniture",
+    "OST_Casework", "OST_PlumbingFixtures", "OST_GenericModel",
+]
+
+
+def visible_design_options(view):
+    """Ids (ints) of the design options shown in this view, found from
+    the design options of the elements Revit shows in it."""
+    cats = NetList[BuiltInCategory]()
+    for name in OPTION_PROBE_CATEGORIES:
+        bic = getattr(BuiltInCategory, name, None)
+        if bic is not None:
+            cats.Add(bic)
+    ids = set()
+    try:
+        elements = (FilteredElementCollector(doc, view.Id)
+                    .WherePasses(ElementMulticategoryFilter(cats))
+                    .WhereElementIsNotElementType())
+    except Exception:
+        return ids
+    for element in elements:
+        try:
+            option = element.DesignOption
+            if option is not None:
+                ids.add(eid_int(option.Id))
+        except Exception:
+            continue
+    return ids
+
+
+def room_option(room):
+    """(design option id as int, is primary) of a room, or (None, True)
+    for a room in the main model."""
+    try:
+        option = room.DesignOption
+    except Exception:
+        option = None
+    if option is None:
+        return None, True
+    try:
+        primary = bool(option.IsPrimary)
+    except Exception:
+        primary = False
+    return eid_int(option.Id), primary
+
+
 class RoomFinder(object):
     """Finds the room at a plan point on the view's level, in this model
     or in any loaded linked model (rooms are often in a linked
@@ -263,28 +322,45 @@ class RoomFinder(object):
 
     Rooms in the view's phase are preferred, but rooms in other phases are
     still used if nothing else is there, so a phase mismatch doesn't mean
-    no labels at all."""
+    no labels at all.
+
+    Design options: only rooms in the main model or in a design option
+    this view is showing are used, so where two options overlap the room
+    names come from the option you can see. In linked models, only main
+    model and primary option rooms are used."""
 
     def __init__(self, view, room_z, phase):
         self.room_z = room_z
         self.level_z = room_z - ROOM_PROBE_HEIGHT
         self.phase_name = safe_name(phase) if phase is not None else ""
-        self.host = self._placed_rooms(doc)
+        self.shown_options = visible_design_options(view)
+        self.hidden_option_rooms = 0
+        self.host = self._placed_rooms(doc, self._host_room_shown)
         self.links = []
         for inst in FilteredElementCollector(doc).OfClass(RevitLinkInstance):
             try:
                 link_doc = inst.GetLinkDocument()
                 if link_doc is None:
                     continue    # link not loaded
-                rooms = self._placed_rooms(link_doc)
+                rooms = self._placed_rooms(link_doc, self._link_room_shown)
                 if rooms:
                     inverse = inst.GetTotalTransform().Inverse
                     self.links.append((inverse, rooms))
             except Exception:
                 continue
 
-    def _placed_rooms(self, source_doc):
-        """[(room, bounding box, phase name)] for placed, enclosed rooms."""
+    def _host_room_shown(self, room):
+        option_id, _ = room_option(room)
+        return option_id is None or option_id in self.shown_options
+
+    @staticmethod
+    def _link_room_shown(room):
+        option_id, primary = room_option(room)
+        return option_id is None or primary
+
+    def _placed_rooms(self, source_doc, shown):
+        """[(room, bounding box, phase name)] for placed, enclosed rooms
+        that shown(room) accepts (design option visible in the view)."""
         out = []
         rooms = (FilteredElementCollector(source_doc)
                  .OfCategory(BuiltInCategory.OST_Rooms)
@@ -293,6 +369,9 @@ class RoomFinder(object):
             try:
                 if room.Area <= 0:
                     continue    # not placed, or not enclosed
+                if not shown(room):
+                    self.hidden_option_rooms += 1
+                    continue    # in a design option this view isn't showing
                 bb = room.get_BoundingBox(None)
                 if bb is None:
                     continue
@@ -1128,6 +1207,9 @@ def main():
                       % pick_height)
     rooms = RoomFinder(view, get_level_z(view) + ROOM_PROBE_HEIGHT,
                        get_view_phase(view))
+    if rooms.hidden_option_rooms:
+        report.append("Ignored %d room(s) in design options not shown in "
+                      "this view." % rooms.hidden_option_rooms)
 
     lines = []
     for element in elements:
