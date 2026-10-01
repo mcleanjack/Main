@@ -27,9 +27,11 @@
 # option chosen in the dialog, either:
 #   - left alone, with any duplicate Marks that result listed in the report, or
 #   - renumbered after the clicked ones, keeping their current Mark order.
-# Only windows visible in the active view are considered, so windows that
-# belong to a different Design Option than the one the view shows are never
-# touched or counted as duplicates.
+# Only windows visible in the active view are considered, so windows in
+# Design Options the view isn't showing are never touched. Matching Marks in
+# two DIFFERENT Design Options are intentional: they are never changed and
+# never reported as duplicates. Only a match in the same option, or one
+# involving a main-model window, is reported (it is still never changed).
 #
 # IMPORTANT: run the graph in MANUAL run mode (not Automatic), otherwise the
 # picking session restarts every time the graph is re-evaluated.
@@ -119,6 +121,22 @@ def natural_key(text):
 
 def format_mark(prefix, number, digits):
     return "{0}{1}".format(prefix, str(number).zfill(digits))
+
+
+def option_key(element):
+    """Design Option id as an int, or None for the main model."""
+    try:
+        opt = element.DesignOption
+    except Exception:
+        opt = None
+    return eid_to_int(opt.Id) if opt is not None else None
+
+
+def options_clash(a, b):
+    """Two windows with the same Mark only count as duplicates if they are
+    in the same Design Option, or either one is in the main model. The same
+    Mark in two different Design Options is fine."""
+    return a is None or b is None or a == b
 
 
 def window_from_picked(element):
@@ -381,10 +399,16 @@ try:
                     assignments.append((w, get_mark(w), format_mark(prefix, start + i, digits)))
 
                 # Duplicates against windows we're not renumbering
-                new_marks = set(a[2] for a in assignments)
+                # Same Mark in two DIFFERENT Design Options is intentional
+                # and is never reported or changed.
+                new_mark_options = {}
+                for (w, _, new) in assignments:
+                    new_mark_options.setdefault(new, []).append(option_key(w))
                 planned_ints = set(eid_to_int(a[0].Id) for a in assignments)
                 clashes = [w for w in view_windows
-                           if eid_to_int(w.Id) not in planned_ints and get_mark(w) in new_marks]
+                           if eid_to_int(w.Id) not in planned_ints
+                           and any(options_clash(option_key(w), k)
+                                   for k in new_mark_options.get(get_mark(w), []))]
 
                 preview = ["{0:<10} -> {1}".format(old or "<blank>", new)
                            for (_, old, new) in assignments]

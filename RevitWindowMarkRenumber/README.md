@@ -37,9 +37,19 @@ that you don't click:
   same order as their current Marks. Click the few windows whose position
   you care about, and the rest follow on.
 
-Only windows **visible in the active view** are looked at. Windows in a
-Design Option the view isn't showing are never changed or reported as
-duplicates, so `W.06` can still exist separately in Option 1 and Option 2.
+### Design Options
+
+The same Mark in different Design Options is intentional, so the tool
+never changes it or flags it:
+
+- Only windows **visible in the active view** are looked at, so windows in
+  options the view isn't showing are never touched.
+- When checking for duplicates, two windows with the same Mark only count
+  if they are in the **same** Design Option, or one of them is in the main
+  model. `W.06` in Option 1 and `W.06` in Option 2 never show up as a
+  duplicate, even if the view shows both options.
+- The duplicate check only ever **reports**. It never renumbers a window
+  you didn't click.
 
 ## Building the graph in Dynamo
 
