@@ -56,7 +56,6 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, BuiltInCategory, BuiltInParameter, ElementId,
     FamilyInstance, IndependentTag
 )
-from Autodesk.Revit.UI import TaskDialog, TaskDialogCommonButtons, TaskDialogResult
 from Autodesk.Revit.UI.Selection import ObjectType
 from Autodesk.Revit.Exceptions import OperationCanceledException
 from RevitServices.Persistence import DocumentManager
@@ -65,7 +64,7 @@ from RevitServices.Transactions import TransactionManager
 from System.Collections.Generic import List as NetList
 from System.Windows.Forms import (
     Form, Label, TextBox, Button, RadioButton, GroupBox,
-    DialogResult, FormStartPosition, FormBorderStyle
+    DialogResult, FormStartPosition, FormBorderStyle, ScrollBars
 )
 from System.Drawing import Point, Size
 
@@ -80,7 +79,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v3 (text boxes, no NumericUpDown)"
+SCRIPT_VERSION = "v4 (WinForms preview, no TaskDialog)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -310,6 +309,50 @@ class SettingsForm(Form):
             format_mark(self.prefix_box.Text, start + 1, digits))
 
 
+class PreviewForm(Form):
+    """Scrollable preview of the changes with OK / Cancel."""
+    def __init__(self, heading, body):
+        Form.__init__(self)
+        self.Text = "Renumber Window Marks - Preview"
+        self.FormBorderStyle = FormBorderStyle.FixedDialog
+        self.StartPosition = FormStartPosition.CenterScreen
+        self.MaximizeBox = False
+        self.MinimizeBox = False
+        self.TopMost = True
+        self.ClientSize = Size(420, 460)
+
+        lbl = Label()
+        lbl.Text = heading
+        lbl.Location = Point(15, 12)
+        lbl.Size = Size(390, 36)
+        self.Controls.Add(lbl)
+
+        box = TextBox()
+        box.Multiline = True
+        box.ReadOnly = True
+        box.ScrollBars = ScrollBars.Vertical
+        box.Text = body.replace("\n", "\r\n")
+        box.Location = Point(15, 50)
+        box.Size = Size(390, 360)
+        self.Controls.Add(box)
+
+        ok = Button()
+        ok.Text = "Apply"
+        ok.Location = Point(210, 420)
+        ok.Size = Size(100, 28)
+        ok.DialogResult = DialogResult.OK
+        self.Controls.Add(ok)
+        self.AcceptButton = ok
+
+        cancel = Button()
+        cancel.Text = "Cancel"
+        cancel.Location = Point(315, 420)
+        cancel.Size = Size(90, 28)
+        cancel.DialogResult = DialogResult.Cancel
+        self.Controls.Add(cancel)
+        self.CancelButton = cancel
+
+
 # ----------------------------------------------------------------------------
 # Picking
 # ----------------------------------------------------------------------------
@@ -435,12 +478,8 @@ try:
                             "and will become duplicates:\n" + \
                             "\n".join(sorted(set(get_mark(w) for w in clashes), key=natural_key))
 
-                td = TaskDialog("Renumber Window Marks")
-                td.MainInstruction = summary + ". Apply?"
-                td.MainContent = body
-                td.CommonButtons = TaskDialogCommonButtons.Ok | TaskDialogCommonButtons.Cancel
-                td.DefaultButton = TaskDialogResult.Ok
-                if td.Show() != TaskDialogResult.Ok:
+                preview_form = PreviewForm(summary + ". Apply?", body)
+                if preview_form.ShowDialog() != DialogResult.OK:
                     status_message = "Cancelled at preview. No changes made."
                 else:
                     TransactionManager.Instance.EnsureInTransaction(doc)
