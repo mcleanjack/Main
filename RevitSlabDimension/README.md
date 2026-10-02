@@ -34,6 +34,24 @@ so the two don't affect each other.
 - The dimension is attached to the slab edge faces, so it updates if the
   slab edges move.
 
+### Visible slab corners
+
+As well as the overall edges below, the string picks up every **slab
+outline corner you can see standing on the line**, even where the line
+doesn't cross that edge. It's the same rule as the wall tool:
+
+- A slab edge only counts if it **faces back towards the line**, and at
+  each point along the string only the **nearest** such edge counts.
+  Wherever that visible outline steps in or out, the corner (the edge
+  square to the string) is dimensioned.
+- **S-shaped outlines:** where the line cuts through an S-shaped edge, only
+  the corner on the jog facing the line is picked up, not the jog facing
+  away.
+- **Outline edges only:** an edge with slab just beyond it (e.g. a shower
+  recess or set-down filled by a lower slab) is ignored, so recess corners
+  aren't picked up.
+- Turned off together with the overall edges: wire `False` into `IN[4]`.
+
 ### Overall slab edges
 
 By default the string also snaps to the **outermost slab edges** in its
@@ -81,7 +99,7 @@ the first point of the string.
 | `IN[4]` | **Boolean** | `True` (default) also snaps to the **overall** slab edges (see below). `False` = only edges the line crosses. |
 
 Wire `OUT` into a **Watch** node. The first line shows the script version,
-e.g. `Slab Auto-Dimension script version 2026-09-29 slab-2`.
+e.g. `Slab Auto-Dimension script version 2026-10-02 slab-6`.
 
 **Running it again:** just click **Run**. At the end of each run (Manual
 mode) the script flips the Boolean on `IN[0]` (True ↔ False). Its value is

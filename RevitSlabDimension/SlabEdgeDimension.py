@@ -60,7 +60,7 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, CurveElement, Line, XYZ, UV, ReferenceArray,
     SubTransaction, PlanarFace, Solid, Options, ViewDetailLevel, ViewPlan,
     DimensionType, DimensionStyleType, BuiltInParameter, BuiltInCategory,
-    ElementMulticategoryFilter
+    ElementMulticategoryFilter, HostObjectUtils
 )
 from Autodesk.Revit.UI.Selection import ObjectType
 from Autodesk.Revit.Exceptions import OperationCanceledException
@@ -79,7 +79,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-09-29 slab-5"
+SCRIPT_VERSION = "2026-10-02 slab-6"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: edges closer than this count as one
@@ -440,6 +440,150 @@ def overall_extremes(view, axis, members, include_foundations):
     return [e for e in (lo, hi) if e is not None]
 
 
+STEP_MATCH_TOL = 0.05        # ~15 mm: an edge face this close to a corner
+OUTLINE_PROBE = 0.15         # ~45 mm: probe just outside an edge face
+
+
+def _top_faces(slabs):
+    """Top faces of the slabs, to tell outline edges from recess edges."""
+    faces = []
+    for slab in slabs:
+        try:
+            for ref in HostObjectUtils.GetTopFaces(slab):
+                face = slab.GetGeometryObjectFromReference(ref)
+                if face is not None:
+                    faces.append(face)
+        except Exception:
+            continue
+    return faces
+
+
+def _on_a_slab(point, top_faces):
+    """True if a slab's top face is directly above / below this point."""
+    for face in top_faces:
+        try:
+            res = face.Project(point)
+            if res is None:
+                continue
+            q = res.XYZPoint
+            if math.hypot(q.X - point.X, q.Y - point.Y) < 0.01:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _face_extent(face, axis, perp, first):
+    """(s min, s max, perp min, perp max, centre) of a planar face."""
+    bb = face.GetBoundingBox()
+    ss, ds = [], []
+    for u in (bb.Min.U, bb.Max.U):
+        for v in (bb.Min.V, bb.Max.V):
+            p = flat(face.Evaluate(UV(u, v)))
+            ss.append(p.Subtract(first.a).DotProduct(axis) + first.s_a)
+            ds.append(p.DotProduct(perp))
+    centre = face.Evaluate(UV((bb.Min.U + bb.Max.U) / 2.0,
+                              (bb.Min.V + bb.Max.V) / 2.0))
+    return min(ss), max(ss), min(ds), max(ds), centre
+
+
+def _outline_faces(view, axis, perp, first, include_foundations):
+    """Vertical slab edge faces on the slab OUTLINE (no slab just beyond
+    them, so recess / set-down edges are left out), split into faces
+    running along the string and faces square to it."""
+    slabs = collect_slabs(view, include_foundations)
+    tops = _top_faces(slabs)
+    along, square = [], []
+    for slab in slabs:
+        for face in slab_faces(slab):
+            try:
+                n = face.FaceNormal
+                if abs(n.Z) > VERTICAL_TOL:
+                    continue
+                n = flat(n).Normalize()
+                s0, s1, d0, d1, centre = _face_extent(face, axis, perp, first)
+                probe = centre.Add(n.Multiply(OUTLINE_PROBE))
+                if _on_a_slab(probe, tops):
+                    continue        # a recess / set-down edge, not outline
+                if abs(n.DotProduct(perp)) >= PARALLEL_COS:
+                    side = 1.0 if n.DotProduct(perp) > 0 else -1.0
+                    along.append((side, s0, s1, (d0 + d1) / 2.0))
+                elif abs(n.DotProduct(axis)) >= PARALLEL_COS:
+                    s = (flat(face.Origin).Subtract(first.a)
+                         .DotProduct(axis) + first.s_a)
+                    square.append((s, d0, d1, face.Reference))
+            except Exception:
+                continue
+    return along, square
+
+
+def _profile_steps(faces, nearest):
+    """Corners in one side's visible outline: [(s, depth a, depth b)].
+    faces: [(side, s0, s1, depth)]; nearest picks the face seen at each
+    point along the string (the one closest to the line)."""
+    cuts = sorted(set([f[1] for f in faces] + [f[2] for f in faces]))
+    profile = []
+    for s0, s1 in zip(cuts, cuts[1:]):
+        if s1 - s0 < DEDUP_TOL:
+            continue
+        mid = (s0 + s1) / 2.0
+        covering = [f[3] for f in faces
+                    if f[1] - DEDUP_TOL <= mid <= f[2] + DEDUP_TOL]
+        profile.append((s0, s1, nearest(covering) if covering else None))
+    steps = []
+    previous = None
+    for s0, s1, depth in profile:
+        if previous is not None:
+            if (previous[2] is None) != (depth is None) or (
+                    depth is not None and previous[2] is not None
+                    and abs(depth - previous[2]) > DEDUP_TOL):
+                a = previous[2] if previous[2] is not None else depth
+                b = depth if depth is not None else previous[2]
+                steps.append((s0, a, b))
+        previous = (s0, s1, depth)
+    if profile and profile[0][2] is not None:
+        steps.insert(0, (profile[0][0], profile[0][2], profile[0][2]))
+    if profile and profile[-1][2] is not None:
+        steps.append((profile[-1][1], profile[-1][2], profile[-1][2]))
+    return steps
+
+
+def visible_corners(view, axis, members, include_foundations):
+    """[(s, Reference)] for the slab outline corners you can see standing
+    on the line: outline edges that face back towards the line (nearest
+    one at each point along the string), and the edge square to the
+    string at every place that outline steps in or out."""
+    first = members[0]
+    perp = XYZ(-axis.Y, axis.X, 0.0)
+    line_d = first.a.DotProduct(perp)
+    along, square = _outline_faces(view, axis, perp, first,
+                                   include_foundations)
+    ahead = [f for f in along
+             if f[3] > line_d + DEDUP_TOL and f[0] < 0]     # faces back
+    behind = [f for f in along
+              if f[3] < line_d - DEDUP_TOL and f[0] > 0]    # faces back
+    steps = []
+    if ahead:
+        steps.extend(_profile_steps(ahead, min))
+    if behind:
+        steps.extend(_profile_steps(behind, max))
+    out = []
+    for s, depth_a, depth_b in steps:
+        lo, hi = min(depth_a, depth_b), max(depth_a, depth_b)
+        best, best_overlap = None, -1.0
+        for sq in square:
+            if abs(sq[0] - s) > STEP_MATCH_TOL:
+                continue
+            overlap = min(hi, sq[2]) - max(lo, sq[1])
+            if overlap < -STEP_MATCH_TOL:
+                continue
+            if overlap > best_overlap:
+                best, best_overlap = sq, overlap
+        if best is not None:
+            out.append((best[0], best[3]))
+    return out
+
+
 def group_hits(view, axis, members, include_foundations, stats,
                add_overall=False):
     """Every slab edge crossed by any line in the group, as a sorted,
@@ -451,9 +595,11 @@ def group_hits(view, axis, members, include_foundations, stats,
             hits.append((line.s_a + t, ref))
     if add_overall and hits:
         # Only for a run that crosses the slab, so a jog between runs
-        # doesn't get an overall string of its own.
-        for s, ref in overall_extremes(view, axis, members,
-                                       include_foundations):
+        # doesn't get an overall string of its own: the outermost edges,
+        # plus the outline corners you can see from the line.
+        extra = overall_extremes(view, axis, members, include_foundations)
+        extra += visible_corners(view, axis, members, include_foundations)
+        for s, ref in extra:
             if all(abs(s - h) >= DEDUP_TOL for h, _ in hits):
                 hits.append((s, ref))
                 stats["overall"] += 1
@@ -500,7 +646,8 @@ def dimension_group(view, axis, members, dim_type, include_foundations,
     msg = ("%s %s: %d slab edges dimensioned across %d slab(s)."
            % (label, ids, len(hits), len(stats["slabs"])))
     if stats["overall"]:
-        msg += (" %d overall slab edge(s) added beyond the line."
+        msg += (" %d overall / visible corner slab edge(s) added "
+                "beyond the line."
                 % stats["overall"])
     return dim, msg
 
