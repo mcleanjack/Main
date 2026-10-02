@@ -81,7 +81,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v7 (re-run diagnostics)"
+SCRIPT_VERSION = "v8 (Manual mode detected as 0)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -479,7 +479,9 @@ def mark_graph_for_rerun():
     except Exception:
         run_type = "unknown"
     # In Automatic mode this would start the script again straight away.
-    if "Manual" not in run_type:
+    # PythonNet reports the RunType enum as a number: Manual = 0,
+    # Automatic = 1, Periodic = 2.
+    if run_type not in ("Manual", "0"):
         debug_info.append("Re-run setup skipped: run mode is {0}, not Manual.".format(run_type))
         return False
 
