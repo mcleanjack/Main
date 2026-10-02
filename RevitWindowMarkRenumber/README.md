@@ -68,8 +68,9 @@ never changes it or flags it:
    Double-click it, delete the template code, paste in the whole of
    `WindowMarkRenumberByClick.py` and click **Save Changes**. CPython3 or
    PythonNet3 both work, and IronPython2 does too.
-4. (Optional) Add a **Boolean** node, set it to `True` and connect it to
-   `IN[0]`. If nothing is connected, the script runs anyway.
+4. Add a **Boolean** node and connect it to `IN[0]`. Its value doesn't
+   matter: the script flips it at the end of each run so that pressing
+   **Run** again works.
 5. (Optional) Add **Watch** nodes on the outputs:
    - `OUT[0]`: the window elements that were renumbered
    - `OUT[1]`: how many Marks changed
