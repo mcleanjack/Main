@@ -102,7 +102,7 @@ def set_mode(key):
 
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v16 (Run again via Boolean flip)"
+SCRIPT_VERSION = "v17 (Boolean flip fix)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -533,7 +533,9 @@ def arm_rerun():
             script = getattr(node, "Script", None)
             if not script or "RENUMBER-BY-CLICK-NODE" not in str(script):
                 continue
-            connectors = list(node.InPorts[0].Connectors)
+            # PythonNet can't index Dynamo's port collections, so go via list().
+            in_ports = list(node.InPorts)
+            connectors = list(in_ports[0].Connectors) if in_ports else []
             if not connectors:
                 debug_info.append("Re-run: nothing wired into IN[0] - wire a Boolean node there "
                                   "so Run works more than once.")
