@@ -96,11 +96,9 @@ again and again.
    isn't on screen, it may be behind the Dynamo window, so check Alt-Tab.
 4. Switch to the Revit view and click the tags in order, then click
    **Finish** (green tick) on the Options Bar.
-5. The status output reads `Completed: …`. To renumber again, just click
-   **Run** again: the script flags the graph as changed when it finishes,
-   so Dynamo runs it again even though nothing in the graph changed. If
-   Run ever does nothing, use Dynamo Player,
-   which always runs the whole graph.
+5. The status output reads `Completed: …`. Dynamo's Run button won't run
+   an unchanged graph again, so to renumber again use **Dynamo Player**
+   (Manage → Dynamo Player), which runs the whole graph every time.
 
 ## Notes
 

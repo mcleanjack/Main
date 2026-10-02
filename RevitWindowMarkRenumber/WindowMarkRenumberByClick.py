@@ -39,9 +39,8 @@
 # involving a main-model window, is reported (it is still never changed).
 #
 # IMPORTANT: run the graph in MANUAL run mode (not Automatic), otherwise the
-# picking session restarts every time the graph is re-evaluated. At the end
-# the script flags the graph as changed, so pressing Run again starts a new
-# renumber straight away.
+# picking session restarts every time the graph is re-evaluated. To run it
+# again later, use Dynamo Player, which always re-runs the whole graph.
 #
 # IN[0] (optional): Boolean "Run" toggle. Defaults to True if not wired.
 #
@@ -102,7 +101,7 @@ def set_mode(key):
 
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v13 (windows or external doors)"
+SCRIPT_VERSION = "v14 (no auto re-run)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -544,80 +543,6 @@ def pick_windows_in_order():
     return windows, False
 
 
-def _mark_all_nodes_modified(workspace):
-    for node in workspace.Nodes:
-        node.MarkNodeAsModified(True)
-
-
-def mark_graph_for_rerun():
-    """Make pressing Run in Dynamo (Manual mode) run the script again, even
-    though nothing in the graph changed.
-
-    Dynamo skips nodes whose inputs haven't changed. Marking the nodes as
-    modified while this node is still running can be undone by Dynamo when
-    the run finishes, so the marking is done again once Dynamo reports the
-    run as completed (EvaluationCompleted). The handler removes itself after
-    firing once."""
-    workspace = None
-    errors = []
-    try:
-        clr.AddReference('DynamoRevitDS')
-        from Dynamo.Applications import DynamoRevit
-    except Exception:
-        debug_info.append("Re-run setup: could not load DynamoRevitDS: " + traceback.format_exc())
-        return False
-    for label, get_model in (("static", lambda: DynamoRevit.RevitDynamoModel),
-                             ("instance", lambda: DynamoRevit().RevitDynamoModel)):
-        try:
-            workspace = get_model().CurrentWorkspace
-            debug_info.append("Re-run setup: reached workspace via {0} RevitDynamoModel ({1} nodes).".format(
-                label, len(list(workspace.Nodes))))
-            break
-        except Exception as ex:
-            errors.append("{0}: {1}".format(label, ex))
-    if workspace is None:
-        debug_info.append("Re-run setup: could not reach the Dynamo workspace: " + " | ".join(errors))
-        return False
-
-    try:
-        run_type = str(workspace.RunSettings.RunType)
-    except Exception:
-        run_type = "unknown"
-    # In Automatic mode this would start the script again straight away.
-    # PythonNet reports the RunType enum as a number: Manual = 0,
-    # Automatic = 1, Periodic = 2.
-    if run_type not in ("Manual", "0"):
-        debug_info.append("Re-run setup skipped: run mode is {0}, not Manual.".format(run_type))
-        return False
-
-    try:
-        _mark_all_nodes_modified(workspace)
-    except Exception:
-        debug_info.append("Re-run setup: marking nodes now failed: " + traceback.format_exc())
-
-    def on_completed(sender, args):
-        try:
-            workspace.EvaluationCompleted -= on_completed
-        except Exception:
-            pass
-        try:
-            _mark_all_nodes_modified(workspace)
-        except Exception:
-            pass
-
-    hooked = []
-    try:
-        workspace.EvaluationCompleted += on_completed
-        hooked.append("EvaluationCompleted")
-    except Exception:
-        debug_info.append("Re-run setup: could not hook EvaluationCompleted: " + traceback.format_exc())
-
-    if hooked:
-        debug_info.append("Re-run setup: OK ({0}) - press Run again to renumber again.".format(", ".join(hooked)))
-        return True
-    return False
-
-
 # ----------------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------------
@@ -753,9 +678,7 @@ except Exception:
     status_message = "The tool encountered an error and stopped safely. See debug info for details."
     debug_info.append(traceback.format_exc())
 
-# Finished (or cancelled): clear the blue highlight and get ready for the
-# next Run.
+# Finished (or cancelled): clear the blue highlight.
 highlight([])
-mark_graph_for_rerun()
 
 OUT = (renamed_windows, changed_count, report_lines, status_message, debug_info)
