@@ -16,11 +16,14 @@
 #      dimensions ONLY to the faces of its Structure [1] layer(s), as set
 #      in the wall type (Edit Type > Structure > Edit, Function column),
 #      e.g. the 90mm timber frame, not the plasterboard either side.
-#      EXTERNAL walls (wall type Function = Exterior) are dimensioned from
+#      BRICK EXTERNAL walls (wall type Function = Exterior, with "brick" in
+#      a layer material or the type name) are dimensioned from
 #      their outer face (e.g. the outside of the brick) to the INNER face
 #      of the Structure layer, as one segment: brick 110 + cavity 40 +
 #      frame 90 = 240. A brick skin modelled as its own external wall (no
-#      Structure layer) gives just its outer face.
+#      Structure layer) gives just its outer face. External walls without
+#      brick (e.g. weatherboard / cladding) are treated like internal
+#      walls: both faces of the Structure layer.
 #      Other walls with no Structure layer are skipped (IN[4] can include
 #      them).
 #   3. Creates ONE continuous linear dimension string through all of those
@@ -116,7 +119,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-01 options-1"
+SCRIPT_VERSION = "2026-10-02 brick-1"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -584,6 +587,32 @@ def wall_layers(wall):
             cs.GetFirstCoreLayerIndex(), cs.GetLastCoreLayerIndex())
 
 
+# External walls are dimensioned from their outer face only if the wall
+# type contains one of these words in a layer's material name or in the
+# wall type name (not case-sensitive). Other external walls are treated
+# like internal walls (both faces of the Structure layer).
+OUTER_FACE_WORDS = ["brick"]
+
+
+def has_brick(wall):
+    """True if any layer material, or the wall type name, contains one of
+    OUTER_FACE_WORDS."""
+    words = [w.lower() for w in OUTER_FACE_WORDS]
+    names = []
+    try:
+        names.append(safe_name(wall.WallType))
+    except Exception:
+        pass
+    try:
+        for layer in wall.WallType.GetCompoundStructure().GetLayers():
+            material = doc.GetElement(layer.MaterialId)
+            if material is not None:
+                names.append(safe_name(material))
+    except Exception:
+        pass
+    return any(w in (n or "").lower() for n in names for w in words)
+
+
 def is_external(wall):
     """True if the wall's type has Function = Exterior
     (Edit Type > Construction > Function)."""
@@ -752,11 +781,12 @@ def collect_face_hits(view, a, b, direction, dim_line, include_others,
         layers = wall_layers(wall)
         clean = layers is not None and len(ext) == 1 and len(inn) == 1
 
-        # External walls also get their outer (exterior finished) face,
-        # e.g. the outside of the brick. It's a real face of the wall, so
-        # the dimension stays attached to it.
+        # Brick external walls also get their outer (exterior finished)
+        # face, i.e. the outside of the brick. It's a real face of the wall,
+        # so the dimension stays attached to it. Other external walls are
+        # treated like internal ones (both Structure faces).
         outer = None
-        if len(ext) == 1 and is_external(wall):
+        if len(ext) == 1 and is_external(wall) and has_brick(wall):
             outer = (ext[0][0], ext[0][2])
             hits.append(outer)
             stats["outer"] += 1
@@ -1021,7 +1051,7 @@ def dimension_group(view, axis, members, dim_type, include_number, rooms,
                      "through them" % (host_rooms, link_rooms))
 
     parts = ["%d on Structure layer" % stats["structure"],
-             "%d external with outer face" % stats["outer"]]
+             "%d brick external with outer face" % stats["outer"]]
     if include_others:
         parts.append("%d on core" % stats["core"])
         parts.append("%d on finish faces" % stats["finish"])

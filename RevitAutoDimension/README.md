@@ -78,7 +78,15 @@ So in each wall type, put the two *Core Boundary* rows **directly either
 side of the Structure layer**. The dimensions then attach to the wall and
 update if it moves or changes type.
 
-### External walls: outer face
+### External walls: outer face (brick walls only)
+
+**Only external walls with brick** get the outer face. A wall counts as
+brick if its type has **Function = Exterior** and either a **layer
+material** or the **wall type name** contains "brick" (e.g.
+*GH-Brick-Facebrick-86x240*). **External walls without brick** (e.g.
+weatherboard or cladding over frame) are dimensioned **like internal
+walls**: both faces of the 90 mm Structure layer. The word list is
+`OUTER_FACE_WORDS` near the top of the script, e.g. `["brick", "block"]`.
 
 For walls whose type has **Function = Exterior** (*Edit Type → Construction
 → Function*), the string runs from the wall's **outer face** (e.g. the
