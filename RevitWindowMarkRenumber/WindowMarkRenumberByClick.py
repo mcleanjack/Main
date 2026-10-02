@@ -81,7 +81,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v5 (green tick to finish, re-runnable)"
+SCRIPT_VERSION = "v6 (re-run fix)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -439,21 +439,58 @@ def pick_windows_in_order():
     return windows, False
 
 
+def _mark_all_nodes_modified(workspace):
+    for node in workspace.Nodes:
+        node.MarkNodeAsModified(True)
+
+
 def mark_graph_for_rerun():
-    """Flag this graph's nodes as modified so pressing Run in Dynamo
-    (Manual mode) runs the script again, even though nothing changed."""
+    """Make pressing Run in Dynamo (Manual mode) run the script again, even
+    though nothing in the graph changed.
+
+    Dynamo skips nodes whose inputs haven't changed. Marking the nodes as
+    modified while this node is still running can be undone by Dynamo when
+    the run finishes, so the marking is done again once Dynamo reports the
+    run as completed (EvaluationCompleted). The handler removes itself after
+    firing once."""
     try:
         clr.AddReference('DynamoRevitDS')
         from Dynamo.Applications import DynamoRevit
         workspace = DynamoRevit.RevitDynamoModel.CurrentWorkspace
-        # In Automatic mode this would start the script again straight away.
-        if "Manual" not in str(workspace.RunSettings.RunType):
-            return False
-        for node in workspace.Nodes:
-            node.MarkNodeAsModified(True)
+    except Exception:
+        debug_info.append("Re-run setup: could not reach the Dynamo workspace: " + traceback.format_exc())
+        return False
+
+    try:
+        run_type = str(workspace.RunSettings.RunType)
+    except Exception:
+        run_type = "unknown"
+    # In Automatic mode this would start the script again straight away.
+    if "Manual" not in run_type:
+        debug_info.append("Re-run setup skipped: run mode is {0}, not Manual.".format(run_type))
+        return False
+
+    try:
+        _mark_all_nodes_modified(workspace)
+    except Exception:
+        debug_info.append("Re-run setup: marking nodes now failed: " + traceback.format_exc())
+
+    def on_completed(sender, args):
+        try:
+            workspace.EvaluationCompleted -= on_completed
+        except Exception:
+            pass
+        try:
+            _mark_all_nodes_modified(workspace)
+        except Exception:
+            pass
+
+    try:
+        workspace.EvaluationCompleted += on_completed
+        debug_info.append("Re-run setup: OK - press Run again to renumber again.")
         return True
     except Exception:
-        debug_info.append("Could not flag graph for re-run: " + traceback.format_exc())
+        debug_info.append("Re-run setup: could not hook EvaluationCompleted: " + traceback.format_exc())
         return False
 
 

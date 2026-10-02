@@ -85,7 +85,7 @@ again and again.
 5. The status output reads `Completed: …`. To renumber again, just click
    **Run** again: the script flags the graph as changed when it finishes,
    so Dynamo runs it again even though nothing in the graph changed. If
-   Run ever does nothing, toggle the Boolean node or use Dynamo Player,
+   Run ever does nothing, use Dynamo Player,
    which always runs the whole graph.
 
 ## Notes
