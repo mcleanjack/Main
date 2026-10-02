@@ -15,10 +15,12 @@
 #      Defaults are guessed from the Marks of the windows in the active view.
 #   2. Lets you click windows in the active view ONE AT A TIME, in the order
 #      you want them numbered. You can click either the window tag OR the
-#      window itself; anything else can't be picked. Clicked windows stay
-#      highlighted blue until the script finishes. Click Finish (the green
-#      tick on the Options Bar) when you're done, or Cancel to stop.
-#      Don't drag a selection box - that loses the click order.
+#      window itself; anything else can't be picked. Clicked windows (and
+#      their tags) turn blue until the script finishes. Click the green
+#      Finish button in the small "Renumber" window (or press Esc) when
+#      you're done; Cancel there stops without changes. (Revit's own green
+#      tick only exists in multi-select mode, which doesn't keep the click
+#      order, so a separate Finish button is used.)
 #   3. Optionally (checkbox in the dialog) shows a preview
 #      ("W.06 -> W.01", ...) and asks for confirmation.
 #   4. Writes the new values to each window's "Mark" parameter (Identity
@@ -62,8 +64,9 @@ clr.AddReference('System.Drawing')
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, BuiltInCategory, BuiltInParameter, ElementId,
-    FamilyInstance, IndependentTag
+    FamilyInstance, IndependentTag, OverrideGraphicSettings, Transaction
 )
+from Autodesk.Revit.DB import Color as RvtColor
 from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 from Autodesk.Revit.Exceptions import OperationCanceledException
 from RevitServices.Persistence import DocumentManager
@@ -72,9 +75,11 @@ from RevitServices.Transactions import TransactionManager
 from System.Collections.Generic import List as NetList
 from System.Windows.Forms import (
     Form, Label, TextBox, Button, RadioButton, GroupBox, CheckBox,
-    DialogResult, FormStartPosition, FormBorderStyle, ScrollBars
+    DialogResult, FormStartPosition, FormBorderStyle, ScrollBars,
+    Screen, SendKeys
 )
 from System.Drawing import Point, Size
+from System.Drawing import Color as DrawingColor
 
 # ----------------------------------------------------------------------------
 # Environment
@@ -102,7 +107,7 @@ def set_mode(key):
 
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v17 (Boolean flip fix)"
+SCRIPT_VERSION = "v18 (one-at-a-time picking, Finish window)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -330,7 +335,7 @@ class SettingsForm(Form):
         y += 92
         self.hint = hint = Label()
         hint.Text = ("Next: click window tags (or windows) one at a time, in order.\n"
-                     "Click Finish (green tick) on the Options Bar when done.")
+                     "Click Finish in the small Renumber window when done.")
         hint.Location = Point(15, y)
         hint.Size = Size(390, 36)
         self.Controls.Add(hint)
@@ -373,11 +378,11 @@ class SettingsForm(Form):
         if key == "doors":
             self.others_group.Text = "Doors in this view that you DON'T click"
             self.hint.Text = ("Next: click door tags (or doors) one at a time, in order.\n"
-                              "Click Finish (green tick) on the Options Bar when done.")
+                              "Click Finish in the small Renumber window when done.")
         else:
             self.others_group.Text = "Windows in this view that you DON'T click"
             self.hint.Text = ("Next: click window tags (or windows) one at a time, in order.\n"
-                              "Click Finish (green tick) on the Options Bar when done.")
+                              "Click Finish in the small Renumber window when done.")
 
     def get_start(self):
         return parse_int(self.start_box.Text, 1, 0, 99999)
@@ -476,43 +481,192 @@ def make_selection_filter():
         return None
 
 
-def pick_windows_in_order():
-    """Lets the user click windows/tags; Revit keeps them highlighted blue.
-    Finish with the green tick (Finish) on the Options Bar.
+class PickHighlighter(object):
+    """Turns clicked elements (and their tags) blue in the active view with
+    temporary graphic overrides, and puts the original overrides back
+    afterwards. Selection highlighting doesn't show during one-at-a-time
+    picking, so overrides are used instead."""
+
+    def __init__(self, view):
+        self.view = view
+        self.saved = {}       # int id -> (ElementId, original overrides)
+        self.tags_by_host = {}
+        try:
+            for tag in FilteredElementCollector(doc, view.Id).OfClass(IndependentTag).ToElements():
+                try:
+                    hosts = list(tag.GetTaggedLocalElementIds())     # Revit 2022+
+                except AttributeError:
+                    hosts = [tag.TaggedLocalElementId]                # Revit < 2022
+                for h in hosts:
+                    self.tags_by_host.setdefault(eid_to_int(h), []).append(tag.Id)
+        except Exception:
+            debug_info.append("Highlight: couldn't list tags: " + traceback.format_exc())
+        blue = RvtColor(0, 120, 215)
+        self.ogs = OverrideGraphicSettings()
+        for setter, value in (("SetProjectionLineColor", blue), ("SetCutLineColor", blue),
+                              ("SetProjectionLineWeight", 6), ("SetCutLineWeight", 6)):
+            try:
+                getattr(self.ogs, setter)(value)
+            except Exception:
+                pass
+
+    def _run(self, name, action):
+        t = Transaction(doc, name)
+        try:
+            t.Start()
+            action()
+            t.Commit()
+        except Exception:
+            debug_info.append("Highlight: " + traceback.format_exc())
+            try:
+                if t.HasStarted() and not t.HasEnded():
+                    t.RollBack()
+            except Exception:
+                pass
+        try:
+            uidoc.RefreshActiveView()
+        except Exception:
+            pass
+
+    def add(self, element):
+        ids = [element.Id] + self.tags_by_host.get(eid_to_int(element.Id), [])
+
+        def action():
+            for eid in ids:
+                key = eid_to_int(eid)
+                if key not in self.saved:
+                    self.saved[key] = (eid, self.view.GetElementOverrides(eid))
+                self.view.SetElementOverrides(eid, self.ogs)
+        self._run("Renumber: highlight", action)
+
+    def restore(self):
+        if not self.saved:
+            return
+        saved, self.saved = self.saved, {}
+
+        def action():
+            for eid, original in saved.values():
+                self.view.SetElementOverrides(eid, original)
+        self._run("Renumber: clear highlight", action)
+
+
+class FinishForm(Form):
+    """Small always-on-top window with Finish / Cancel buttons, shown while
+    picking (Revit's own green tick only exists for multi-select, which
+    doesn't keep the click order). A button press sends Esc to Revit to end
+    the current pick."""
+
+    def __init__(self):
+        Form.__init__(self)
+        self.Text = "Renumber"
+        self.FormBorderStyle = FormBorderStyle.FixedToolWindow
+        self.StartPosition = FormStartPosition.Manual
+        self.TopMost = True
+        self.ShowInTaskbar = False
+        self.ClientSize = Size(230, 95)
+        area = Screen.PrimaryScreen.WorkingArea
+        self.Location = Point(area.Right - 270, area.Top + 140)
+        self.result = None
+
+        self.info = Label()
+        self.info.Location = Point(10, 8)
+        self.info.Size = Size(210, 36)
+        self.Controls.Add(self.info)
+
+        finish = Button()
+        finish.Text = u"\u2714 Finish"
+        finish.BackColor = DrawingColor.FromArgb(46, 160, 67)
+        finish.ForeColor = DrawingColor.White
+        finish.Location = Point(10, 52)
+        finish.Size = Size(120, 32)
+        finish.Click += self.on_finish
+        self.Controls.Add(finish)
+
+        cancel = Button()
+        cancel.Text = "Cancel"
+        cancel.Location = Point(140, 52)
+        cancel.Size = Size(80, 32)
+        cancel.Click += self.on_cancel
+        self.Controls.Add(cancel)
+
+    def _end_pick(self):
+        # Give Revit focus and press Esc so the waiting PickObject returns.
+        try:
+            import ctypes
+            hwnd = uiapp.MainWindowHandle
+            try:
+                hwnd = hwnd.ToInt64()
+            except Exception:
+                hwnd = int(str(hwnd))
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except Exception:
+            debug_info.append("Finish: couldn't focus Revit: " + traceback.format_exc())
+        try:
+            SendKeys.SendWait("{ESC}")
+        except Exception:
+            debug_info.append("Finish: couldn't send Esc: " + traceback.format_exc())
+
+    def on_finish(self, sender, args):
+        self.result = "finish"
+        self._end_pick()
+
+    def on_cancel(self, sender, args):
+        self.result = "cancel"
+        self._end_pick()
+
+
+def pick_windows_in_order(prefix, start, digits, highlighter):
+    """Picks windows/tags ONE CLICK AT A TIME (PickObject in a loop), which
+    is the only way to be sure of the click order. Each click turns blue.
+    Ends with the Finish button (or Esc); Cancel discards the picks.
     Returns (windows in click order, cancelled)."""
-    prompt = ("Click {0} tags (or {0}s) one at a time in order, "
-              "then click Finish (green tick) on the Options Bar").format(MODE["noun"])
     sel_filter = make_selection_filter()
     highlight([])
-    try:
-        refs = None
-        if sel_filter is not None:
-            try:
-                refs = uidoc.Selection.PickObjects(ObjectType.Element, sel_filter, prompt)
-            except OperationCanceledException:
-                raise
-            except Exception:
-                debug_info.append("PickObjects with filter failed, retrying without: " + traceback.format_exc())
-                refs = None
-        if refs is None:
-            refs = uidoc.Selection.PickObjects(ObjectType.Element, prompt)
-    except OperationCanceledException:
-        return [], True
-
     windows = []
     seen = set()
-    # Revit hands back PickObjects results newest-first, so reverse them
-    # to get the order they were clicked in.
-    for ref in reversed(list(refs)):
-        window, reason = window_from_picked(doc.GetElement(ref.ElementId))
-        if window is None:
-            debug_info.append("Ignored pick: " + reason)
-            continue
-        wid = eid_to_int(window.Id)
-        if wid in seen:          # tag and its window both clicked
-            continue
-        seen.add(wid)
-        windows.append(window)
+    finish_form = FinishForm()
+    try:
+        finish_form.Show()
+    except Exception:
+        debug_info.append("Finish window unavailable: " + traceback.format_exc())
+    try:
+        while True:
+            next_mark = format_mark(prefix, start + len(windows), digits)
+            finish_form.info.Text = "{0} picked. Next: {1}\nClick Finish when done.".format(
+                len(windows), next_mark)
+            prompt = "[{0} picked] Click the {1} (or its tag) for {2}  -  Finish (or Esc) when done".format(
+                len(windows), MODE["noun"], next_mark)
+            try:
+                if sel_filter is not None:
+                    try:
+                        ref = uidoc.Selection.PickObject(ObjectType.Element, sel_filter, prompt)
+                    except OperationCanceledException:
+                        raise
+                    except Exception:
+                        debug_info.append("PickObject with filter failed, retrying without: " + traceback.format_exc())
+                        sel_filter = None
+                        continue
+                else:
+                    ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
+            except OperationCanceledException:
+                break
+            window, reason = window_from_picked(doc.GetElement(ref.ElementId))
+            if window is None:
+                debug_info.append("Ignored pick: " + reason)
+                continue
+            wid = eid_to_int(window.Id)
+            if wid in seen:          # already clicked (or its tag was)
+                continue
+            seen.add(wid)
+            windows.append(window)
+            highlighter.add(window)
+    finally:
+        try:
+            finish_form.Close()
+        except Exception:
+            pass
+    if finish_form.result == "cancel":
+        return [], True
     return windows, False
 
 
@@ -575,9 +729,8 @@ def run_one_renumber(view, form):
     continue_others = bool(form.continue_radio.Checked)
     show_preview = bool(form.preview_check.Checked)
 
-    picked, cancelled = pick_windows_in_order()
-    # Keep the clicked windows highlighted until this round is done.
-    highlight([w.Id for w in picked])
+    highlighter = PickHighlighter(view)
+    picked, cancelled = pick_windows_in_order(prefix, start, digits, highlighter)
     try:
         if cancelled:
             return "Picking cancelled. No changes made."
@@ -625,6 +778,8 @@ def run_one_renumber(view, form):
                 return "Cancelled at preview. No changes made."
 
         changed_here = 0
+        # Clicked items stay blue until here; clear before writing Marks.
+        highlighter.restore()
         TransactionManager.Instance.EnsureInTransaction(doc)
         for w, old, new in assignments:
             p = w.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)
@@ -650,7 +805,7 @@ def run_one_renumber(view, form):
             "; {0} duplicate(s) left - see report".format(len(clashes)) if clashes else "",
             MODE["noun"])
     finally:
-        highlight([])
+        highlighter.restore()
 
 
 try:

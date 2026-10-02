@@ -18,18 +18,22 @@ in the view.
    already used by windows in the active view.
 2. You click **window tags or the windows themselves** in the active view,
    one at a time, in the order you want.
-   - Windows you've clicked stay highlighted blue until the script finishes.
+   - Each click turns that window (and its tag) blue until the script
+     finishes.
    - Only windows and window tags can be picked.
-   - Click them one at a time. Dragging a selection box loses the click
-     order.
-   - Click **Finish** (the green tick on the Options Bar) when you're done,
-     or **Cancel** to stop without changing anything.
+   - A small **Renumber** window shows how many you've picked and the next
+     number. Click its green **Finish** button (or press Esc) when you're
+     done, or **Cancel** to stop without changing anything.
+   - Revit's own green tick on the Options Bar isn't used: it belongs to
+     Revit's multi-select mode, which doesn't keep the click order.
 3. If you ticked **Show a preview before applying** in the dialog, a preview
    lists every change (`W.06 -> W.01`, …) and any duplicate Marks that
    would result. Click **Apply** or **Cancel**. The preview is off by
    default, so the Marks change as soon as you click Finish.
-4. All Marks are written in one transaction, so **one Ctrl+Z** in Revit
-   undoes the whole renumber.
+4. All Marks are written in one transaction. The blue highlighting is done
+   with temporary graphic overrides in their own small transactions, which
+   are put back before the Marks are written, so Revit's undo list shows a
+   few "Renumber: highlight" entries alongside the renumber itself.
 
 ### Windows you don't click
 
@@ -89,7 +93,7 @@ again and again.
 3. Check the settings dialog and click **Start Picking**. If the dialog
    isn't on screen, it may be behind the Dynamo window, so check Alt-Tab.
 4. Switch to the Revit view and click the tags in order, then click
-   **Finish** (green tick) on the Options Bar.
+   the green **Finish** button in the small Renumber window.
 5. The status output reads `Completed: …`. To renumber again, just press
    **Run** again. At the end of every run the script flips the Boolean wired
    into `IN[0]` (True ↔ False). Its value doesn't matter, but the change is
