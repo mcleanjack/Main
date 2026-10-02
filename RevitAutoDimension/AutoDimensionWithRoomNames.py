@@ -119,7 +119,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-02 facade-2"
+SCRIPT_VERSION = "2026-10-02 look-1"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -1057,16 +1057,27 @@ def _profile_steps(faces, nearest):
     return steps
 
 
-def _facade_steps(facades, line_d):
+def _facade_steps(facades, line_d, look=0):
     """Corners of the external walls you can see standing on the line:
     [(s, depth a, depth b)].
 
+    look = +1 / -1: you're looking one way from the line (the pop-up's
+    Look up / Look down). Only the outer walls AHEAD of the line that way
+    count, whichever way they face, nearest first - so for a line through
+    an S-bend you get the corner ahead of you, not the one behind.
+
+    look = 0 (Both sides):
     A facade face (an exterior face running along the string) is only
     visible if it faces back towards the line - e.g. looking north from
     the line you see the south-facing outer walls north of it, not the
     ones behind you or facing away. On each side of the line, the face
     nearest the line is the one seen at each point along the string, and
     every place that outline steps in or out is a corner to dimension."""
+    if look:
+        ahead = [f for f in facades if (f[3] - line_d) * look > DEDUP_TOL]
+        if not ahead:
+            return []
+        return _profile_steps(ahead, min if look > 0 else max)
     ahead = [f for f in facades
              if f[3] > line_d + DEDUP_TOL and f[0] < 0]     # faces back
     behind = [f for f in facades
@@ -1077,6 +1088,24 @@ def _facade_steps(facades, line_d):
     if behind:
         steps.extend(_profile_steps(behind, max))
     return steps
+
+
+def look_sign(view, axis):
+    """+1 / -1 / 0: which side of the string (along perp = axis turned
+    90 degrees) you're looking towards, from the pop-up's LOOK choice.
+    'up' means up the view for strings running across it, and left for
+    strings running up it."""
+    if LOOK not in ("up", "down"):
+        return 0
+    perp = XYZ(-axis.Y, axis.X, 0.0)
+    try:
+        right, up = view.RightDirection, view.UpDirection
+        across = abs(axis.DotProduct(right)) >= abs(axis.DotProduct(up))
+        towards = up if across else right.Negate()
+    except Exception:
+        towards = XYZ(0, 1, 0)
+    sign = 1 if perp.DotProduct(towards) >= 0 else -1
+    return sign if LOOK == "up" else -sign
 
 
 def external_points(view, axis, members, notes):
@@ -1102,7 +1131,8 @@ def external_points(view, axis, members, notes):
 
     if ADD_FACADE_STEPS:
         line_d = first.a.DotProduct(perp)
-        for s, depth_a, depth_b in _facade_steps(facades, line_d):
+        for s, depth_a, depth_b in _facade_steps(
+                facades, line_d, look_sign(view, axis)):
             lo, hi = min(depth_a, depth_b), max(depth_a, depth_b)
             best, best_overlap = None, -1.0
             for r in returns:
@@ -1275,6 +1305,32 @@ SETTINGS_FILE = os.path.join(tempfile.gettempdir(),
 CANCELLED = object()
 
 
+LOOK_FILE = os.path.join(tempfile.gettempdir(), "AutoDimension_look.txt")
+LOOK_CHOICES = [
+    ("up", "Look up the view (or left, for lines running up the view)"),
+    ("down", "Look down the view (or right, for lines running up it)"),
+    ("both", "Both sides (outer walls facing back towards the line)"),
+]
+LOOK = "both"
+
+
+def load_look():
+    try:
+        with open(LOOK_FILE) as f:
+            value = f.read().strip()
+            return value if value in ("up", "down", "both") else "both"
+    except Exception:
+        return "both"
+
+
+def save_look(value):
+    try:
+        with open(LOOK_FILE, "w") as f:
+            f.write(value)
+    except Exception:
+        pass
+
+
 def load_last_height():
     """Last height typed in the pop-up ("" = automatic)."""
     try:
@@ -1293,21 +1349,22 @@ def save_last_height(text):
 
 
 def ask_pick_height():
-    """Pop-up asking for the wall pick-up height. Returns a height in mm,
-    None for automatic, or CANCELLED. Built from a plain Form (no
+    """Pop-up asking for the wall pick-up height and the look direction.
+    Returns (height in mm or None for automatic, look) or CANCELLED. Built from a plain Form (no
     subclass) so it works on both the CPython3 and IronPython engines."""
     clr.AddReference('System.Windows.Forms')
     clr.AddReference('System.Drawing')
     from System.Windows.Forms import (
         Form, Label, TextBox, CheckBox, Button, DialogResult,
-        FormStartPosition, FormBorderStyle, MessageBox)
+        FormStartPosition, FormBorderStyle, MessageBox, RadioButton)
     from System.Drawing import Point, Size
 
     last = load_last_height()
+    last_look = load_look()
 
     form = Form()
     form.Text = "Auto-Dimension"
-    form.ClientSize = Size(380, 170)
+    form.ClientSize = Size(400, 290)
     form.StartPosition = FormStartPosition.CenterScreen
     form.FormBorderStyle = FormBorderStyle.FixedDialog
     form.MaximizeBox = False
@@ -1341,15 +1398,31 @@ def ask_pick_height():
             box.Focus()
     auto.CheckedChanged += on_auto_changed
 
+    look_label = Label()
+    look_label.Text = ("External wall corners the line doesn't cross - "
+                       "which way are you looking from the line?")
+    look_label.Location = Point(15, 115)
+    look_label.Size = Size(375, 32)
+    form.Controls.Add(look_label)
+    radios = []
+    for i, (key, text) in enumerate(LOOK_CHOICES):
+        radio = RadioButton()
+        radio.Text = text
+        radio.Location = Point(15, 148 + i * 26)
+        radio.Size = Size(375, 24)
+        radio.Checked = (key == last_look)
+        form.Controls.Add(radio)
+        radios.append((key, radio))
+
     ok = Button()
     ok.Text = "OK - pick lines"
-    ok.Location = Point(165, 125)
+    ok.Location = Point(185, 245)
     ok.Size = Size(110, 30)
     form.Controls.Add(ok)
 
     cancel = Button()
     cancel.Text = "Cancel"
-    cancel.Location = Point(285, 125)
+    cancel.Location = Point(305, 245)
     cancel.Size = Size(80, 30)
     cancel.DialogResult = DialogResult.Cancel
     form.Controls.Add(cancel)
@@ -1372,12 +1445,14 @@ def ask_pick_height():
 
     if form.ShowDialog() != DialogResult.OK:
         return CANCELLED
+    look = next((key for key, radio in radios if radio.Checked), "both")
+    save_look(look)
     if auto.Checked:
         save_last_height("")
-        return None
+        return None, look
     text = box.Text.strip()
     save_last_height(text)
-    return height_mm(text)
+    return height_mm(text), look
 
 
 # ----------------------------------------------------------------------------
@@ -1404,6 +1479,8 @@ def main():
 
     # Wall pick-up height: IN[5], else a number on IN[0], else ask in a
     # pop-up (remembers the last value).
+    global LOOK
+    LOOK = load_look()      # last choice, if the pop-up isn't shown
     pick_height = height_mm(_in(5))
     if pick_height is None:
         pick_height = in0_height
@@ -1411,7 +1488,7 @@ def main():
         answer = ask_pick_height()
         if answer is CANCELLED:
             return [], "Cancelled. Nothing done."
-        pick_height = answer
+        pick_height, LOOK = answer
 
     if not elements:
         elements = pick_lines()

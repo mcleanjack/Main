@@ -97,10 +97,18 @@ the line doesn't cross that wall:
   back towards the line**. At each point along the string, only the face
   **nearest the line** counts, so walls hidden behind it don't. Its
   corners (where that outline steps in or out) are dimensioned.
-- **S-shaped walls:** where the line cuts through an S-shaped external
-  wall, only the corner on the jog that faces the line is picked up. The
-  jog facing away (on the other side of the line) isn't, because you
-  can't see that face from the line.
+- **Which way you're looking (pop-up):** the pop-up that asks for the
+  pick-up height also asks which way you're looking from the line. It
+  remembers your last choice:
+  - **Look up the view** (or **left**, for lines running up the view): only
+    external corners **ahead of the line** in that direction are added.
+    For a line through an **S-bend**, you get the corner ahead of you and
+    not the one behind.
+  - **Look down the view** (or **right**): the opposite.
+  - **Both sides:** outer walls facing back towards the line, on either
+    side.
+- If the height is wired in (so there's no pop-up), the last choice made
+  in the pop-up is used.
 - Only **external** walls count (type Function = Exterior). Points the line
   already picks up aren't repeated.
 - The report counts them, e.g. `5 external wall point(s) added beyond the line`.

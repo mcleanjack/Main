@@ -50,6 +50,8 @@
 
 import clr
 import math
+import os
+import tempfile
 import traceback
 
 clr.AddReference('RevitAPI')
@@ -79,7 +81,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-02 slab-6"
+SCRIPT_VERSION = "2026-10-02 slab-7"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: edges closer than this count as one
@@ -558,15 +560,24 @@ def visible_corners(view, axis, members, include_foundations):
     line_d = first.a.DotProduct(perp)
     along, square = _outline_faces(view, axis, perp, first,
                                    include_foundations)
-    ahead = [f for f in along
-             if f[3] > line_d + DEDUP_TOL and f[0] < 0]     # faces back
-    behind = [f for f in along
-              if f[3] < line_d - DEDUP_TOL and f[0] > 0]    # faces back
+    look = look_sign(view, axis)
     steps = []
-    if ahead:
-        steps.extend(_profile_steps(ahead, min))
-    if behind:
-        steps.extend(_profile_steps(behind, max))
+    if look:
+        # Looking one way (pop-up): only the outline AHEAD of the line that
+        # way, whichever way the edges face, nearest first - so for a line
+        # through an S-bend you get the corner ahead, not the one behind.
+        ahead = [f for f in along if (f[3] - line_d) * look > DEDUP_TOL]
+        if ahead:
+            steps.extend(_profile_steps(ahead, min if look > 0 else max))
+    else:
+        ahead = [f for f in along
+                 if f[3] > line_d + DEDUP_TOL and f[0] < 0]     # faces back
+        behind = [f for f in along
+                  if f[3] < line_d - DEDUP_TOL and f[0] > 0]    # faces back
+        if ahead:
+            steps.extend(_profile_steps(ahead, min))
+        if behind:
+            steps.extend(_profile_steps(behind, max))
     out = []
     for s, depth_a, depth_b in steps:
         lo, hi = min(depth_a, depth_b), max(depth_a, depth_b)
@@ -653,6 +664,113 @@ def dimension_group(view, axis, members, dim_type, include_foundations,
 
 
 # ----------------------------------------------------------------------------
+# Pop-up: which way you're looking from the line
+# ----------------------------------------------------------------------------
+
+LOOK_FILE = os.path.join(tempfile.gettempdir(), "SlabDimension_look.txt")
+LOOK_CHOICES = [
+    ("up", "Look up the view (or left, for lines running up the view)"),
+    ("down", "Look down the view (or right, for lines running up it)"),
+    ("both", "Both sides (slab edges facing back towards the line)"),
+]
+LOOK = "both"
+CANCELLED = object()
+
+
+def load_look():
+    try:
+        with open(LOOK_FILE) as f:
+            value = f.read().strip()
+            return value if value in ("up", "down", "both") else "both"
+    except Exception:
+        return "both"
+
+
+def save_look(value):
+    try:
+        with open(LOOK_FILE, "w") as f:
+            f.write(value)
+    except Exception:
+        pass
+
+
+def ask_look():
+    """Pop-up: which way to look from the line for slab corners the line
+    doesn't cross. Returns "up" / "down" / "both", or CANCELLED. Built
+    from a plain Form so it works on CPython3 and IronPython."""
+    clr.AddReference('System.Windows.Forms')
+    clr.AddReference('System.Drawing')
+    from System.Windows.Forms import (
+        Form, Label, Button, RadioButton, DialogResult, FormStartPosition,
+        FormBorderStyle)
+    from System.Drawing import Point, Size
+
+    last = load_look()
+    form = Form()
+    form.Text = "Slab Auto-Dimension"
+    form.ClientSize = Size(400, 175)
+    form.StartPosition = FormStartPosition.CenterScreen
+    form.FormBorderStyle = FormBorderStyle.FixedDialog
+    form.MaximizeBox = False
+    form.MinimizeBox = False
+    form.TopMost = True
+
+    label = Label()
+    label.Text = ("Slab corners the line doesn't cross - which way are you "
+                  "looking from the line?")
+    label.Location = Point(15, 12)
+    label.Size = Size(375, 32)
+    form.Controls.Add(label)
+    radios = []
+    for i, (key, text) in enumerate(LOOK_CHOICES):
+        radio = RadioButton()
+        radio.Text = text
+        radio.Location = Point(15, 45 + i * 26)
+        radio.Size = Size(375, 24)
+        radio.Checked = (key == last)
+        form.Controls.Add(radio)
+        radios.append((key, radio))
+
+    ok = Button()
+    ok.Text = "OK - pick lines"
+    ok.Location = Point(185, 130)
+    ok.Size = Size(110, 30)
+    ok.DialogResult = DialogResult.OK
+    form.Controls.Add(ok)
+    cancel = Button()
+    cancel.Text = "Cancel"
+    cancel.Location = Point(305, 130)
+    cancel.Size = Size(80, 30)
+    cancel.DialogResult = DialogResult.Cancel
+    form.Controls.Add(cancel)
+    form.AcceptButton = ok
+    form.CancelButton = cancel
+
+    if form.ShowDialog() != DialogResult.OK:
+        return CANCELLED
+    look = next((key for key, radio in radios if radio.Checked), "both")
+    save_look(look)
+    return look
+
+
+def look_sign(view, axis):
+    """+1 / -1 / 0: which side of the string (along perp = axis turned 90
+    degrees) you're looking towards. 'up' means up the view for strings
+    running across it, and left for strings running up it."""
+    if LOOK not in ("up", "down"):
+        return 0
+    perp = XYZ(-axis.Y, axis.X, 0.0)
+    try:
+        right, up = view.RightDirection, view.UpDirection
+        across = abs(axis.DotProduct(right)) >= abs(axis.DotProduct(up))
+        towards = up if across else right.Negate()
+    except Exception:
+        towards = XYZ(0, 1, 0)
+    sign = 1 if perp.DotProduct(towards) >= 0 else -1
+    return sign if LOOK == "up" else -sign
+
+
+# ----------------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------------
 
@@ -662,6 +780,17 @@ def main():
         return [], ("Active view '%s' is not a plan view. Open the slab "
                     "plan you drew the line in and run again."
                     % safe_name(view))
+
+    # Which way you're looking from the line, for corners it doesn't cross
+    # (pop-up, remembers the last choice). Skipped if IN[4] turns the
+    # overall / corner edges off.
+    global LOOK
+    LOOK = load_look()
+    if bool(_in(4, True)):
+        answer = ask_look()
+        if answer is CANCELLED:
+            return [], "Cancelled. Nothing done."
+        LOOK = answer
 
     # A Boolean / number / text on IN[0] isn't a line: pick on screen.
     elements = [_unwrap(e) for e in _as_list(_in(0))

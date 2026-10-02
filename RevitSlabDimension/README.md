@@ -44,9 +44,16 @@ doesn't cross that edge. It's the same rule as the wall tool:
   each point along the string only the **nearest** such edge counts.
   Wherever that visible outline steps in or out, the corner (the edge
   square to the string) is dimensioned.
-- **S-shaped outlines:** where the line cuts through an S-shaped edge, only
-  the corner on the jog facing the line is picked up, not the jog facing
-  away.
+- **Which way you're looking (pop-up):** each run, a small pop-up asks
+  which way you're looking from the line. It remembers your last choice:
+  - **Look up the view** (or **left**, for lines running up the view): only
+    slab corners **ahead of the line** in that direction are added. For a
+    line through an **S-bend**, you get the corner ahead of you and not
+    the one behind.
+  - **Look down the view** (or **right**): the opposite.
+  - **Both sides:** slab edges facing back towards the line, on either side.
+- The pop-up isn't shown if `IN[4]` is `False` (overall / corner edges
+  off).
 - **Outline edges only:** an edge with slab just beyond it (e.g. a shower
   recess or set-down filled by a lower slab) is ignored, so recess corners
   aren't picked up.
@@ -99,7 +106,7 @@ the first point of the string.
 | `IN[4]` | **Boolean** | `True` (default) also snaps to the **overall** slab edges (see below). `False` = only edges the line crosses. |
 
 Wire `OUT` into a **Watch** node. The first line shows the script version,
-e.g. `Slab Auto-Dimension script version 2026-10-02 slab-6`.
+e.g. `Slab Auto-Dimension script version 2026-10-02 slab-7`.
 
 **Running it again:** just click **Run**. At the end of each run (Manual
 mode) the script flips the Boolean on `IN[0]` (True ↔ False). Its value is
