@@ -1,16 +1,13 @@
 # ============================================================================
-# Revit Window / External Door Mark Renumber - by clicking in order
+# Revit Window / Door Mark Renumber - by clicking in order
 # ----------------------------------------------------------------------------
 # Paste this entire file into a single Dynamo "Python Script" node.
 #
 # Engine: CPython3 / PythonNet3 (Dynamo 2.13+ / Revit 2022+). Also runs
 # unmodified on the legacy IronPython2 engine.
 #
-# Works on WINDOWS or EXTERNAL DOORS - choose at the top of the dialog.
-# Everything below says "window", but applies to doors in doors mode. In
-# doors mode you can click any door; the "unclicked" doors used for the
-# duplicate check and "Number them after" option are external doors only
-# (door type Function = Exterior, or the host wall type Function = Exterior).
+# Works on WINDOWS or DOORS - choose at the top of the dialog. Everything
+# below says "window", but applies the same way to doors in doors mode.
 #
 # What it does:
 #   1. Shows a small dialog asking for the Mark format: prefix (e.g. "W."),
@@ -86,9 +83,9 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 # What is being renumbered. Chosen in the settings dialog.
 MODES = {
     "windows": {"bic": BuiltInCategory.OST_Windows, "noun": "window",
-                "default_prefix": "W.", "external_only": False},
+                "default_prefix": "W."},
     "doors":   {"bic": BuiltInCategory.OST_Doors, "noun": "door",
-                "default_prefix": "D.", "external_only": True},
+                "default_prefix": "D."},
 }
 MODE = dict(MODES["windows"])
 MODE["cat_id"] = ElementId(MODE["bic"])
@@ -101,7 +98,7 @@ def set_mode(key):
 
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v14 (no auto re-run)"
+SCRIPT_VERSION = "v15 (all doors)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -128,32 +125,6 @@ def is_window(element):
                 and element.Category.Id.Equals(MODE["cat_id"]))
     except Exception:
         return False
-
-
-def _is_exterior_function(element_type):
-    """Type parameter "Function" = Exterior (stored as 1)."""
-    try:
-        p = element_type.get_Parameter(BuiltInParameter.FUNCTION_PARAM)
-        return p is not None and p.HasValue and p.AsInteger() == 1
-    except Exception:
-        return False
-
-
-def is_external_door(door):
-    """A door counts as external if its type's Function is Exterior, or the
-    wall it sits in has a wall type with Function = Exterior."""
-    try:
-        if _is_exterior_function(doc.GetElement(door.GetTypeId())):
-            return True
-    except Exception:
-        pass
-    try:
-        host = door.Host
-        if host is not None and _is_exterior_function(doc.GetElement(host.GetTypeId())):
-            return True
-    except Exception:
-        pass
-    return False
 
 
 def get_mark(element):
@@ -224,7 +195,7 @@ def window_from_picked(element):
 
 
 def collect_view_windows(view, mode_key=None):
-    """Windows (or, in doors mode, EXTERNAL doors) visible in the view.
+    """Windows (or, in doors mode, doors) visible in the view.
     These are the ones checked for duplicates and numbered on with the
     "Number them after the clicked ones" option."""
     mode = MODES[mode_key] if mode_key else MODE
@@ -235,8 +206,6 @@ def collect_view_windows(view, mode_key=None):
               .WhereElementIsNotElementType()
               .ToElements()):
         if not isinstance(e, FamilyInstance) or e.Category is None or not e.Category.Id.Equals(cat_id):
-            continue
-        if mode["external_only"] and not is_external_door(e):
             continue
         found.append(e)
     return found
@@ -286,7 +255,7 @@ class SettingsForm(Form):
         self.windows_radio.Checked = True
         self.Controls.Add(self.windows_radio)
         self.doors_radio = RadioButton()
-        self.doors_radio.Text = "External doors"
+        self.doors_radio.Text = "Doors"
         self.doors_radio.Location = Point(240, y)
         self.doors_radio.Size = Size(150, 22)
         self.Controls.Add(self.doors_radio)
@@ -398,7 +367,7 @@ class SettingsForm(Form):
         self.prefix_box.Text = prefix
         self.digits_box.Text = str(digits)
         if key == "doors":
-            self.others_group.Text = "External doors in this view that you DON'T click"
+            self.others_group.Text = "Doors in this view that you DON'T click"
             self.hint.Text = ("Next: click door tags (or doors) one at a time, in order.\n"
                               "Click Finish (green tick) on the Options Bar when done.")
         else:
@@ -663,7 +632,7 @@ try:
         for key in ("windows", "doors"):
             found = collect_view_windows(view, key)
             debug_info.append("{0} in active view: {1}".format(
-                "Windows" if key == "windows" else "External doors", len(found)))
+                "Windows" if key == "windows" else "Doors", len(found)))
             guesses[key] = guess_format(found, MODES[key]["default_prefix"])
 
         form = SettingsForm(guesses)

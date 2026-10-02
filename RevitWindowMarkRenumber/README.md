@@ -4,19 +4,12 @@ A Dynamo/Revit tool for renumbering window tags by clicking them in the
 order you want. Each window's **Mark** (Identity Data) is rewritten as
 `W.01`, `W.02`, … in click order, so the tags update right away.
 
-## Windows or external doors
+## Windows or doors
 
 The first row of the dialog chooses what to renumber: **Windows** or
-**External doors**. Picking *External doors* switches the prefix to the one
-your doors already use (e.g. `D.`), and everything below works the same way
-for doors.
-
-In doors mode you can click any door (or door tag). The *unclicked* doors
-that are checked for duplicates, or numbered on with "Number them after the
-clicked ones", are **external doors only**. A door counts as external if its
-type's **Function** is *Exterior*, or the wall it sits in has a wall type
-with **Function** = *Exterior*. Internal doors are never touched unless you
-click them.
+**Doors**. Picking *Doors* switches the prefix to the one your doors already
+use (e.g. `D.`), and everything below works the same way for any door shown
+in the view.
 
 ## What it does
 
