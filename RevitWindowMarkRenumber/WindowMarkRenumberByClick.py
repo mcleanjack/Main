@@ -1,10 +1,16 @@
 # ============================================================================
-# Revit Window Mark Renumber - by clicking in order
+# Revit Window / External Door Mark Renumber - by clicking in order
 # ----------------------------------------------------------------------------
 # Paste this entire file into a single Dynamo "Python Script" node.
 #
 # Engine: CPython3 / PythonNet3 (Dynamo 2.13+ / Revit 2022+). Also runs
 # unmodified on the legacy IronPython2 engine.
+#
+# Works on WINDOWS or EXTERNAL DOORS - choose at the top of the dialog.
+# Everything below says "window", but applies to doors in doors mode. In
+# doors mode you can click any door; the "unclicked" doors used for the
+# duplicate check and "Number them after" option are external doors only
+# (door type Function = Exterior, or the host wall type Function = Exterior).
 #
 # What it does:
 #   1. Shows a small dialog asking for the Mark format: prefix (e.g. "W."),
@@ -78,10 +84,25 @@ doc = DocumentManager.Instance.CurrentDBDocument
 uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
-WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
+# What is being renumbered. Chosen in the settings dialog.
+MODES = {
+    "windows": {"bic": BuiltInCategory.OST_Windows, "noun": "window",
+                "default_prefix": "W.", "external_only": False},
+    "doors":   {"bic": BuiltInCategory.OST_Doors, "noun": "door",
+                "default_prefix": "D.", "external_only": True},
+}
+MODE = dict(MODES["windows"])
+MODE["cat_id"] = ElementId(MODE["bic"])
+
+
+def set_mode(key):
+    MODE.clear()
+    MODE.update(MODES[key])
+    MODE["cat_id"] = ElementId(MODE["bic"])
+
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v12 (click order fixed)"
+SCRIPT_VERSION = "v13 (windows or external doors)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -100,12 +121,40 @@ def eid_to_int(element_id):
 
 
 def is_window(element):
+    """True for an element of the category being renumbered (windows or
+    doors - the name is kept from the windows-only version)."""
     try:
         return (isinstance(element, FamilyInstance)
                 and element.Category is not None
-                and element.Category.Id.Equals(WINDOWS_CAT_ID))
+                and element.Category.Id.Equals(MODE["cat_id"]))
     except Exception:
         return False
+
+
+def _is_exterior_function(element_type):
+    """Type parameter "Function" = Exterior (stored as 1)."""
+    try:
+        p = element_type.get_Parameter(BuiltInParameter.FUNCTION_PARAM)
+        return p is not None and p.HasValue and p.AsInteger() == 1
+    except Exception:
+        return False
+
+
+def is_external_door(door):
+    """A door counts as external if its type's Function is Exterior, or the
+    wall it sits in has a wall type with Function = Exterior."""
+    try:
+        if _is_exterior_function(doc.GetElement(door.GetTypeId())):
+            return True
+    except Exception:
+        pass
+    try:
+        host = door.Host
+        if host is not None and _is_exterior_function(doc.GetElement(host.GetTypeId())):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def get_mark(element):
@@ -170,19 +219,31 @@ def window_from_picked(element):
             tagged = doc.GetElement(tid)
             if is_window(tagged):
                 return tagged, None
-        return None, "that tag isn't tagging a window in this model (linked windows can't be renumbered)"
+        return None, "that tag isn't tagging a {0} in this model (linked ones can't be renumbered)".format(MODE["noun"])
     cat = element.Category.Name if element.Category is not None else "element"
-    return None, "that's a {0}, not a window or window tag".format(cat)
+    return None, "that's a {0}, not a {1} or {1} tag".format(cat, MODE["noun"])
 
 
-def collect_view_windows(view):
-    return [w for w in FilteredElementCollector(doc, view.Id)
-            .OfCategory(BuiltInCategory.OST_Windows)
-            .WhereElementIsNotElementType()
-            .ToElements() if is_window(w)]
+def collect_view_windows(view, mode_key=None):
+    """Windows (or, in doors mode, EXTERNAL doors) visible in the view.
+    These are the ones checked for duplicates and numbered on with the
+    "Number them after the clicked ones" option."""
+    mode = MODES[mode_key] if mode_key else MODE
+    cat_id = ElementId(mode["bic"])
+    found = []
+    for e in (FilteredElementCollector(doc, view.Id)
+              .OfCategory(mode["bic"])
+              .WhereElementIsNotElementType()
+              .ToElements()):
+        if not isinstance(e, FamilyInstance) or e.Category is None or not e.Category.Id.Equals(cat_id):
+            continue
+        if mode["external_only"] and not is_external_door(e):
+            continue
+        found.append(e)
+    return found
 
 
-def guess_format(windows):
+def guess_format(windows, default_prefix="W."):
     """Guess (prefix, digits) from the most common existing Mark pattern."""
     counts = {}
     for w in windows:
@@ -191,7 +252,7 @@ def guess_format(windows):
             key = (m.group(1), len(m.group(2)))
             counts[key] = counts.get(key, 0) + 1
     if not counts:
-        return "W.", 2
+        return default_prefix, 2
     return max(counts.items(), key=lambda kv: kv[1])[0]
 
 
@@ -200,17 +261,38 @@ def guess_format(windows):
 # ----------------------------------------------------------------------------
 
 class SettingsForm(Form):
-    def __init__(self, prefix, digits):
+    def __init__(self, guesses):
+        """guesses: {"windows": (prefix, digits), "doors": (prefix, digits)}"""
         Form.__init__(self)
-        self.Text = "Renumber Window Marks by Clicking"
+        self.guesses = guesses
+        prefix, digits = guesses["windows"]
+        self.Text = "Renumber Window / Door Marks by Clicking"
         self.FormBorderStyle = FormBorderStyle.FixedDialog
         self.StartPosition = FormStartPosition.CenterScreen
         self.MaximizeBox = False
         self.MinimizeBox = False
         self.TopMost = True
-        self.ClientSize = Size(420, 370)
+        self.ClientSize = Size(420, 405)
 
         y = 15
+        lbl = Label()
+        lbl.Text = "Renumber:"
+        lbl.Location = Point(15, y + 3)
+        lbl.Size = Size(130, 20)
+        self.Controls.Add(lbl)
+        self.windows_radio = RadioButton()
+        self.windows_radio.Text = "Windows"
+        self.windows_radio.Location = Point(150, y)
+        self.windows_radio.Size = Size(85, 22)
+        self.windows_radio.Checked = True
+        self.Controls.Add(self.windows_radio)
+        self.doors_radio = RadioButton()
+        self.doors_radio.Text = "External doors"
+        self.doors_radio.Location = Point(240, y)
+        self.doors_radio.Size = Size(150, 22)
+        self.Controls.Add(self.doors_radio)
+
+        y += 35
         lbl = Label()
         lbl.Text = "Prefix:"
         lbl.Location = Point(15, y + 3)
@@ -256,7 +338,7 @@ class SettingsForm(Form):
         self.update_example(None, None)
 
         y += 40
-        grp = GroupBox()
+        self.others_group = grp = GroupBox()
         grp.Text = "Windows in this view that you DON'T click"
         grp.Location = Point(15, y)
         grp.Size = Size(390, 80)
@@ -274,7 +356,7 @@ class SettingsForm(Form):
         self.Controls.Add(grp)
 
         y += 92
-        hint = Label()
+        self.hint = hint = Label()
         hint.Text = ("Next: click window tags (or windows) one at a time, in order.\n"
                      "Click Finish (green tick) on the Options Bar when done.")
         hint.Location = Point(15, y)
@@ -290,7 +372,7 @@ class SettingsForm(Form):
 
         ok = Button()
         ok.Text = "Start Picking"
-        ok.Location = Point(210, 330)
+        ok.Location = Point(210, 365)
         ok.Size = Size(100, 28)
         ok.DialogResult = DialogResult.OK
         self.Controls.Add(ok)
@@ -298,11 +380,32 @@ class SettingsForm(Form):
 
         cancel = Button()
         cancel.Text = "Cancel"
-        cancel.Location = Point(315, 330)
+        cancel.Location = Point(315, 365)
         cancel.Size = Size(90, 28)
         cancel.DialogResult = DialogResult.Cancel
         self.Controls.Add(cancel)
         self.CancelButton = cancel
+
+        # Switching between windows and doors swaps the guessed prefix
+        # (e.g. W. -> D.) and the wording.
+        self.windows_radio.CheckedChanged += self.on_mode_changed
+
+    def mode_key(self):
+        return "doors" if self.doors_radio.Checked else "windows"
+
+    def on_mode_changed(self, sender, args):
+        key = self.mode_key()
+        prefix, digits = self.guesses[key]
+        self.prefix_box.Text = prefix
+        self.digits_box.Text = str(digits)
+        if key == "doors":
+            self.others_group.Text = "External doors in this view that you DON'T click"
+            self.hint.Text = ("Next: click door tags (or doors) one at a time, in order.\n"
+                              "Click Finish (green tick) on the Options Bar when done.")
+        else:
+            self.others_group.Text = "Windows in this view that you DON'T click"
+            self.hint.Text = ("Next: click window tags (or windows) one at a time, in order.\n"
+                              "Click Finish (green tick) on the Options Bar when done.")
 
     def get_start(self):
         return parse_int(self.start_box.Text, 1, 0, 99999)
@@ -405,8 +508,8 @@ def pick_windows_in_order():
     """Lets the user click windows/tags; Revit keeps them highlighted blue.
     Finish with the green tick (Finish) on the Options Bar.
     Returns (windows in click order, cancelled)."""
-    prompt = ("Click window tags (or windows) one at a time in order, "
-              "then click Finish (green tick) on the Options Bar")
+    prompt = ("Click {0} tags (or {0}s) one at a time in order, "
+              "then click Finish (green tick) on the Options Bar").format(MODE["noun"])
     sel_filter = make_selection_filter()
     highlight([])
     try:
@@ -572,14 +675,14 @@ def run_one_renumber(view, form):
         if show_preview:
             preview = ["{0:<10} -> {1}".format(old or "<blank>", new)
                        for (_, old, new) in assignments]
-            summary = "{0} window(s) clicked".format(len(picked))
+            summary = "{0} {1}(s) clicked".format(len(picked), MODE["noun"])
             if continue_others:
                 summary += ", {0} other(s) numbered after them".format(len(plan) - len(picked))
             body = "\n".join(preview[:40])
             if len(preview) > 40:
                 body += "\n... and {0} more".format(len(preview) - 40)
             if clashes:
-                body += "\n\nWARNING - these unclicked windows already use one of the new Marks " \
+                body += "\n\nWARNING - these unclicked {0}s already use one of the new Marks ".format(MODE["noun"]) + \
                         "and will become duplicates:\n" + \
                         "\n".join(sorted(set(get_mark(w) for w in clashes), key=natural_key))
             if PreviewForm(summary + ". Apply?", body).ShowDialog() != DialogResult.OK:
@@ -606,12 +709,13 @@ def run_one_renumber(view, form):
         changed_count += changed_here
 
         for w in clashes:
-            report_lines.append("DUPLICATE: unclicked window id {0} still has Mark {1}".format(
-                eid_to_int(w.Id), get_mark(w)))
+            report_lines.append("DUPLICATE: unclicked {2} id {0} still has Mark {1}".format(
+                eid_to_int(w.Id), get_mark(w), MODE["noun"]))
 
-        return "{0} window Mark(s) changed{1}.".format(
+        return "{0} {2} Mark(s) changed{1}.".format(
             changed_here,
-            "; {0} duplicate(s) left - see report".format(len(clashes)) if clashes else "")
+            "; {0} duplicate(s) left - see report".format(len(clashes)) if clashes else "",
+            MODE["noun"])
     finally:
         highlight([])
 
@@ -629,15 +733,20 @@ try:
         status_message = "No active Revit document/UI found."
     else:
         view = uidoc.ActiveView
-        view_windows = collect_view_windows(view)
         debug_info.append("Active view: {0}".format(view.Name))
-        debug_info.append("Windows visible in active view: {0}".format(len(view_windows)))
+        guesses = {}
+        for key in ("windows", "doors"):
+            found = collect_view_windows(view, key)
+            debug_info.append("{0} in active view: {1}".format(
+                "Windows" if key == "windows" else "External doors", len(found)))
+            guesses[key] = guess_format(found, MODES[key]["default_prefix"])
 
-        guess_prefix, guess_digits = guess_format(view_windows)
-        form = SettingsForm(guess_prefix, guess_digits)
+        form = SettingsForm(guesses)
         if form.ShowDialog() != DialogResult.OK:
             status_message = "Cancelled by user. No changes made."
         else:
+            set_mode(form.mode_key())
+            debug_info.append("Renumbering: " + form.mode_key())
             status_message = "Completed: " + run_one_renumber(view, form)
 
 except Exception:
