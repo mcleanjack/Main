@@ -12,13 +12,12 @@
 #      Defaults are guessed from the Marks of the windows in the active view.
 #   2. Lets you click windows in the active view ONE AT A TIME, in the order
 #      you want them numbered. You can click either the window tag OR the
-#      window itself. Clicked windows stay highlighted so you can see which
-#      ones you've done. The Revit status bar (bottom-left) shows the Mark
-#      the next click will receive.
-#        - Click an already-clicked window again to remove it from the list
-#          (every window after it moves up one number).
-#        - Press Esc (or right-click > Cancel) when you're finished.
-#   3. Shows a preview ("W.06 -> W.01", ...) and asks for confirmation.
+#      window itself; anything else can't be picked. Clicked windows stay
+#      highlighted blue until the script finishes. Click Finish (the green
+#      tick on the Options Bar) when you're done, or Cancel to stop.
+#      Don't drag a selection box - that loses the click order.
+#   3. Optionally (checkbox in the dialog) shows a preview
+#      ("W.06 -> W.01", ...) and asks for confirmation.
 #   4. Writes the new values to each window's "Mark" parameter (Identity
 #      Data) in a single transaction, so one Ctrl+Z in Revit undoes it all.
 #      Tags read the Mark, so they update automatically.
@@ -34,7 +33,9 @@
 # involving a main-model window, is reported (it is still never changed).
 #
 # IMPORTANT: run the graph in MANUAL run mode (not Automatic), otherwise the
-# picking session restarts every time the graph is re-evaluated.
+# picking session restarts every time the graph is re-evaluated. At the end
+# the script flags the graph as changed, so pressing Run again starts a new
+# renumber straight away.
 #
 # IN[0] (optional): Boolean "Run" toggle. Defaults to True if not wired.
 #
@@ -45,6 +46,7 @@
 import clr
 import re
 import traceback
+import uuid
 
 clr.AddReference('RevitAPI')
 clr.AddReference('RevitAPIUI')
@@ -56,14 +58,14 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector, BuiltInCategory, BuiltInParameter, ElementId,
     FamilyInstance, IndependentTag
 )
-from Autodesk.Revit.UI.Selection import ObjectType
+from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 from Autodesk.Revit.Exceptions import OperationCanceledException
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
 from System.Collections.Generic import List as NetList
 from System.Windows.Forms import (
-    Form, Label, TextBox, Button, RadioButton, GroupBox,
+    Form, Label, TextBox, Button, RadioButton, GroupBox, CheckBox,
     DialogResult, FormStartPosition, FormBorderStyle, ScrollBars
 )
 from System.Drawing import Point, Size
@@ -79,7 +81,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v4 (WinForms preview, no TaskDialog)"
+SCRIPT_VERSION = "v5 (green tick to finish, re-runnable)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -206,7 +208,7 @@ class SettingsForm(Form):
         self.MaximizeBox = False
         self.MinimizeBox = False
         self.TopMost = True
-        self.ClientSize = Size(420, 330)
+        self.ClientSize = Size(420, 370)
 
         y = 15
         lbl = Label()
@@ -273,15 +275,22 @@ class SettingsForm(Form):
 
         y += 92
         hint = Label()
-        hint.Text = ("Next: click window tags (or windows) in order.\n"
-                     "Click one again to remove it. Press Esc when done.")
+        hint.Text = ("Next: click window tags (or windows) one at a time, in order.\n"
+                     "Click Finish (green tick) on the Options Bar when done.")
         hint.Location = Point(15, y)
         hint.Size = Size(390, 36)
         self.Controls.Add(hint)
 
+        self.preview_check = CheckBox()
+        self.preview_check.Text = "Show a preview before applying"
+        self.preview_check.Location = Point(15, y + 40)
+        self.preview_check.Size = Size(300, 22)
+        self.preview_check.Checked = False
+        self.Controls.Add(self.preview_check)
+
         ok = Button()
         ok.Text = "Start Picking"
-        ok.Location = Point(210, 290)
+        ok.Location = Point(210, 330)
         ok.Size = Size(100, 28)
         ok.DialogResult = DialogResult.OK
         self.Controls.Add(ok)
@@ -289,7 +298,7 @@ class SettingsForm(Form):
 
         cancel = Button()
         cancel.Text = "Cancel"
-        cancel.Location = Point(315, 290)
+        cancel.Location = Point(315, 330)
         cancel.Size = Size(90, 28)
         cancel.DialogResult = DialogResult.Cancel
         self.Controls.Add(cancel)
@@ -358,45 +367,94 @@ class PreviewForm(Form):
 # ----------------------------------------------------------------------------
 
 def highlight(ids):
+    """Select (= highlight blue) the given ElementIds in Revit."""
     try:
         uidoc.Selection.SetElementIds(NetList[ElementId](ids))
     except Exception:
         pass
 
 
-def pick_windows_in_order(prefix, start, digits):
-    """Returns the list of picked window ElementIds (as ints) in click order."""
-    order = []          # ints, in click order
-    by_int = {}         # int -> window element
-    last_msg = ""
+def make_selection_filter():
+    """ISelectionFilter that only lets windows and window tags be picked.
+    The class gets a unique .NET namespace each run, because PythonNet
+    refuses to define the same .NET type twice in one Dynamo session.
+    Returns None if the engine can't build it (picking still works, other
+    elements are just ignored afterwards)."""
+    try:
+        def allow_element(self, element):
+            try:
+                return window_from_picked(element)[0] is not None
+            except Exception:
+                return False
+
+        def allow_reference(self, reference, position):
+            return False
+
+        cls = type("WindowOrTagFilter", (ISelectionFilter,), {
+            "__namespace__": "WindowMarkRenumber_" + uuid.uuid4().hex,
+            "AllowElement": allow_element,
+            "AllowReference": allow_reference,
+        })
+        return cls()
+    except Exception:
+        debug_info.append("Selection filter unavailable: " + traceback.format_exc())
+        return None
+
+
+def pick_windows_in_order():
+    """Lets the user click windows/tags; Revit keeps them highlighted blue.
+    Finish with the green tick (Finish) on the Options Bar.
+    Returns (windows in click order, cancelled)."""
+    prompt = ("Click window tags (or windows) one at a time in order, "
+              "then click Finish (green tick) on the Options Bar")
+    sel_filter = make_selection_filter()
     highlight([])
-    while True:
-        next_mark = format_mark(prefix, start + len(order), digits)
-        prompt = "[{0} picked] Click window/tag for {1}  -  click again to remove  -  Esc to finish".format(
-            len(order), next_mark)
-        if last_msg:
-            prompt = last_msg + "  |  " + prompt
-        try:
-            ref = uidoc.Selection.PickObject(ObjectType.Element, prompt)
-        except OperationCanceledException:
-            break
-        picked = doc.GetElement(ref.ElementId)
-        window, reason = window_from_picked(picked)
+    try:
+        refs = None
+        if sel_filter is not None:
+            try:
+                refs = uidoc.Selection.PickObjects(ObjectType.Element, sel_filter, prompt)
+            except OperationCanceledException:
+                raise
+            except Exception:
+                debug_info.append("PickObjects with filter failed, retrying without: " + traceback.format_exc())
+                refs = None
+        if refs is None:
+            refs = uidoc.Selection.PickObjects(ObjectType.Element, prompt)
+    except OperationCanceledException:
+        return [], True
+
+    windows = []
+    seen = set()
+    for ref in refs:
+        window, reason = window_from_picked(doc.GetElement(ref.ElementId))
         if window is None:
-            last_msg = "Ignored: " + reason
+            debug_info.append("Ignored pick: " + reason)
             continue
         wid = eid_to_int(window.Id)
-        if wid in by_int:
-            pos = order.index(wid)
-            order.remove(wid)
-            del by_int[wid]
-            last_msg = "Removed {0} (was #{1})".format(get_mark(window) or "<no mark>", pos + 1)
-        else:
-            order.append(wid)
-            by_int[wid] = window
-            last_msg = "{0} -> {1}".format(get_mark(window) or "<no mark>", next_mark)
-        highlight([by_int[i].Id for i in order])
-    return [by_int[i] for i in order]
+        if wid in seen:          # tag and its window both clicked
+            continue
+        seen.add(wid)
+        windows.append(window)
+    return windows, False
+
+
+def mark_graph_for_rerun():
+    """Flag this graph's nodes as modified so pressing Run in Dynamo
+    (Manual mode) runs the script again, even though nothing changed."""
+    try:
+        clr.AddReference('DynamoRevitDS')
+        from Dynamo.Applications import DynamoRevit
+        workspace = DynamoRevit.RevitDynamoModel.CurrentWorkspace
+        # In Automatic mode this would start the script again straight away.
+        if "Manual" not in str(workspace.RunSettings.RunType):
+            return False
+        for node in workspace.Nodes:
+            node.MarkNodeAsModified(True)
+        return True
+    except Exception:
+        debug_info.append("Could not flag graph for re-run: " + traceback.format_exc())
+        return False
 
 
 # ----------------------------------------------------------------------------
@@ -435,11 +493,16 @@ try:
             digits = form.get_digits()
             continue_others = bool(form.continue_radio.Checked)
 
-            picked = pick_windows_in_order(prefix, start, digits)
+            show_preview = bool(form.preview_check.Checked)
 
-            if not picked:
+            picked, cancelled = pick_windows_in_order()
+            # Keep the clicked windows highlighted until the script ends.
+            highlight([w.Id for w in picked])
+
+            if cancelled:
+                status_message = "Picking cancelled. No changes made."
+            elif not picked:
                 status_message = "No windows were clicked. No changes made."
-                highlight([])
             else:
                 # Build the new numbering plan: clicked windows first, then
                 # (optionally) the unclicked windows in their current order.
@@ -478,8 +541,7 @@ try:
                             "and will become duplicates:\n" + \
                             "\n".join(sorted(set(get_mark(w) for w in clashes), key=natural_key))
 
-                preview_form = PreviewForm(summary + ". Apply?", body)
-                if preview_form.ShowDialog() != DialogResult.OK:
+                if show_preview and PreviewForm(summary + ". Apply?", body).ShowDialog() != DialogResult.OK:
                     status_message = "Cancelled at preview. No changes made."
                 else:
                     TransactionManager.Instance.EnsureInTransaction(doc)
@@ -502,12 +564,17 @@ try:
                         report_lines.append("DUPLICATE: unclicked window id {0} still has Mark {1}".format(
                             eid_to_int(w.Id), get_mark(w)))
 
-                    status_message = "{0} window Mark(s) changed{1}.".format(
+                    status_message = "Completed: {0} window Mark(s) changed{1}.".format(
                         changed_count,
                         "; {0} duplicate(s) left - see report".format(len(clashes)) if clashes else "")
 
 except Exception:
     status_message = "The tool encountered an error and stopped safely. See debug info for details."
     debug_info.append(traceback.format_exc())
+
+# Finished (or cancelled): clear the blue highlight and get ready for the
+# next Run.
+highlight([])
+mark_graph_for_rerun()
 
 OUT = (renamed_windows, changed_count, report_lines, status_message, debug_info)

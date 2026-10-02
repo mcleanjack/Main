@@ -11,16 +11,16 @@ order you want. Each window's **Mark** (Identity Data) is rewritten as
    already used by windows in the active view.
 2. You click **window tags or the windows themselves** in the active view,
    one at a time, in the order you want.
-   - The Revit status bar (bottom-left) shows the Mark that your next click
-     will get, plus the result of your last click (e.g. `W.06 -> W.01`).
-   - Windows you've clicked stay highlighted.
-   - Clicking a window again takes it off the list, and every window after
-     it moves up one number.
-   - Anything that isn't a window or a window tag is ignored.
-   - Press **Esc** when you're done.
-3. A preview lists every change (`W.06 -> W.01`, …) and any duplicate Marks
-   that would result. Click **OK** to apply it or **Cancel** to make no
-   changes.
+   - Windows you've clicked stay highlighted blue until the script finishes.
+   - Only windows and window tags can be picked.
+   - Click them one at a time. Dragging a selection box loses the click
+     order.
+   - Click **Finish** (the green tick on the Options Bar) when you're done,
+     or **Cancel** to stop without changing anything.
+3. If you ticked **Show a preview before applying** in the dialog, a preview
+   lists every change (`W.06 -> W.01`, …) and any duplicate Marks that
+   would result. Click **Apply** or **Cancel**. The preview is off by
+   default, so the Marks change as soon as you click Finish.
 4. All Marks are written in one transaction, so **one Ctrl+Z** in Revit
    undoes the whole renumber.
 
@@ -31,8 +31,8 @@ that you don't click:
 
 - **Leave them alone** (default): they keep their Marks. If one of them
   already uses a new number (e.g. you renumbered three windows to
-  W.01–W.03 but an unclicked window is still W.02), the preview and the
-  report warn you about the duplicate.
+  W.01–W.03 but an unclicked window is still W.02), the report (and the
+  preview, if it's on) warns you about the duplicate.
 - **Number them after the clicked ones**: they get the next numbers, in the
   same order as their current Marks. Click the few windows whose position
   you care about, and the rest follow on.
@@ -80,9 +80,13 @@ again and again.
 2. Click **Run** in Dynamo (or in Dynamo Player).
 3. Check the settings dialog and click **Start Picking**. If the dialog
    isn't on screen, it may be behind the Dynamo window, so check Alt-Tab.
-4. Switch to the Revit view and click the tags in order. Press **Esc** to
-   finish.
-5. Check the preview, then click **OK**.
+4. Switch to the Revit view and click the tags in order, then click
+   **Finish** (green tick) on the Options Bar.
+5. The status output reads `Completed: …`. To renumber again, just click
+   **Run** again: the script flags the graph as changed when it finishes,
+   so Dynamo runs it again even though nothing in the graph changed. If
+   Run ever does nothing, toggle the Boolean node or use Dynamo Player,
+   which always runs the whole graph.
 
 ## Notes
 
