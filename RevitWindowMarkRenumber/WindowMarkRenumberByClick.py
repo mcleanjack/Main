@@ -76,7 +76,7 @@ from System.Collections.Generic import List as NetList
 from System.Windows.Forms import (
     Form, Label, TextBox, Button, RadioButton, GroupBox, CheckBox,
     DialogResult, FormStartPosition, FormBorderStyle, ScrollBars,
-    Screen, SendKeys
+    Screen, SendKeys, Application
 )
 from System.Drawing import Point, Size
 from System.Drawing import Color as DrawingColor
@@ -107,7 +107,7 @@ def set_mode(key):
 
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v18 (one-at-a-time picking, Finish window)"
+SCRIPT_VERSION = "v19 (Finish button fix)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -590,21 +590,33 @@ class FinishForm(Form):
         self.Controls.Add(cancel)
 
     def _end_pick(self):
-        # Give Revit focus and press Esc so the waiting PickObject returns.
+        """Press Esc in Revit so the waiting PickObject returns. Hiding this
+        window first hands the focus back to Revit, so the Esc lands there
+        and not on this window."""
+        log = []
+        try:
+            self.Hide()
+            Application.DoEvents()
+        except Exception as ex:
+            log.append("hide failed: {0}".format(ex))
         try:
             import ctypes
+            user32 = ctypes.windll.user32
+            user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
             hwnd = uiapp.MainWindowHandle
             try:
                 hwnd = hwnd.ToInt64()
             except Exception:
                 hwnd = int(str(hwnd))
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
-        except Exception:
-            debug_info.append("Finish: couldn't focus Revit: " + traceback.format_exc())
+            log.append("focus Revit: {0}".format(bool(user32.SetForegroundWindow(hwnd))))
+        except Exception as ex:
+            log.append("focus failed: {0}".format(ex))
         try:
             SendKeys.SendWait("{ESC}")
-        except Exception:
-            debug_info.append("Finish: couldn't send Esc: " + traceback.format_exc())
+            log.append("Esc sent")
+        except Exception as ex:
+            log.append("Esc failed: {0}".format(ex))
+        debug_info.append("{0} clicked: {1}".format(self.result, "; ".join(log)))
 
     def on_finish(self, sender, args):
         self.result = "finish"
