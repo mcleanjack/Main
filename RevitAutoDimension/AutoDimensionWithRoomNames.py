@@ -119,7 +119,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-02 brick-1"
+SCRIPT_VERSION = "2026-10-02 overall-1"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -939,6 +939,80 @@ def direction_groups(chain):
 # Building the dimension
 # ----------------------------------------------------------------------------
 
+# Also snap to the outermost external walls at each end of the string, even
+# where the line doesn't reach them (brick: outer face of the brick; other
+# external walls: outer face of the Structure layer).
+ADD_OVERALL_EXTERNAL = True
+
+
+def overall_external_extremes(view, axis, members, notes):
+    """[(s, Reference), ...] for the outermost external wall at each end
+    of the string, across every external wall visible in the view. s is
+    the distance along the axis, measured like the drawn lines."""
+    first = members[0]
+    dim_line = Line.CreateBound(XYZ(first.a.X, first.a.Y, first.z),
+                                XYZ(first.b.X, first.b.Y, first.z))
+    lo = hi = None      # (s, wall, ext_face_ref, sign)
+    for wall in collect_walls(view):
+        try:
+            if wall.WallType.Kind == WallKind.Curtain or not is_external(wall):
+                continue
+            refs = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior)
+        except Exception:
+            continue
+        for ref in refs:
+            try:
+                face = wall.GetGeometryObjectFromReference(ref)
+                if not isinstance(face, PlanarFace):
+                    continue
+                n = flat(face.FaceNormal)
+                if n.GetLength() < 1e-9:
+                    continue
+                d = n.Normalize().DotProduct(axis)
+                if abs(d) < PARALLEL_COS:
+                    continue            # not square to the string
+                s = (flat(face.Origin).Subtract(first.a).DotProduct(axis)
+                     + first.s_a)
+                # The outer face at the low end points back along the
+                # axis; at the high end it points forward.
+                if d < 0 and (lo is None or s < lo[0]):
+                    lo = (s, wall, ref, -1.0)
+                if d > 0 and (hi is None or s > hi[0]):
+                    hi = (s, wall, ref, 1.0)
+            except Exception:
+                continue
+
+    out = []
+    for found in (lo, hi):
+        if found is None:
+            continue
+        s, wall, ext_ref, sign = found
+        if has_brick(wall):
+            out.append((s, ext_ref))        # outside of the brick
+            continue
+        # Not brick: outer face of the Structure layer, offset in from the
+        # exterior face by the layers outside it.
+        layers = wall_layers(wall)
+        offsets = structure_offsets(layers) if layers else None
+        if not offsets:
+            out.append((s, ext_ref))        # no Structure layer: outer face
+            continue
+        offset = offsets[0]
+        try:
+            int_ref = list(HostObjectUtils.GetSideFaces(
+                wall, ShellLayerType.Interior))[0]
+        except Exception:
+            int_ref = None
+        ref = ref_at_offset(wall, view, dim_line, ext_ref, int_ref, offset,
+                            sum(layers[0])) if int_ref is not None else None
+        if ref is None:
+            notes.append("Wall %s: outer face of its Structure layer not "
+                         "found for the overall end" % wall.Id)
+            continue
+        out.append((s - sign * offset, ref))
+    return out
+
+
 def group_hits(view, axis, members, include_others, stats, notes, pick_z):
     """Every wall face crossed by any line in the group, as a sorted,
     de-duplicated list of (s, Reference), s = distance along the axis."""
@@ -950,6 +1024,16 @@ def group_hits(view, axis, members, include_others, stats, notes, pick_z):
                                         dim_line, include_others,
                                         stats, notes, pick_z):
             hits.append((line.s_a + t, ref))
+    if ADD_OVERALL_EXTERNAL and hits:
+        # Only for a run that crosses walls, so a jog between runs doesn't
+        # get a string of its own. Only added beyond the faces the line
+        # already crosses.
+        lo_s = min(h[0] for h in hits)
+        hi_s = max(h[0] for h in hits)
+        for s, ref in overall_external_extremes(view, axis, members, notes):
+            if s < lo_s - DEDUP_TOL or s > hi_s + DEDUP_TOL:
+                hits.append((s, ref))
+                stats["overall"] += 1
     hits.sort(key=lambda h: h[0])
     deduped = []
     for s, ref in hits:
@@ -1004,7 +1088,7 @@ def dimension_group(view, axis, members, dim_type, include_number, rooms,
     Returns (Dimension or None, message)."""
     notes = []
     stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0,
-             "outer": 0}
+             "outer": 0, "overall": 0}
     hits = group_hits(view, axis, members, include_others, stats, notes,
                       pick_z)
     ids = ", ".join(str(line.element.Id) for line in members)
@@ -1051,7 +1135,8 @@ def dimension_group(view, axis, members, dim_type, include_number, rooms,
                      "through them" % (host_rooms, link_rooms))
 
     parts = ["%d on Structure layer" % stats["structure"],
-             "%d brick external with outer face" % stats["outer"]]
+             "%d brick external with outer face" % stats["outer"],
+             "%d overall external end(s) added" % stats["overall"]]
     if include_others:
         parts.append("%d on core" % stats["core"])
         parts.append("%d on finish faces" % stats["finish"])

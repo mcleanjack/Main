@@ -78,6 +78,24 @@ So in each wall type, put the two *Core Boundary* rows **directly either
 side of the Structure layer**. The dimensions then attach to the wall and
 update if it moves or changes type.
 
+### Overall ends: outermost external walls
+
+The string also snaps to the **outermost external wall at each end**, even
+where your line doesn't reach it, so it always shows the overall size:
+
+| Outermost external wall is... | Snaps to |
+|---|---|
+| **Brick** | the **outer face of the brick** |
+| **Not brick** | the **outer face of the 90 mm Structure layer** (frame) |
+
+- It looks at every **external** wall (type Function = Exterior) visible in
+  the view. Internal walls never count.
+- An end point is only added if that wall is **beyond** the walls the line
+  already crosses, so nothing doubles up.
+- The report counts them, e.g. `2 overall external end(s) added`.
+- To turn this off, set `ADD_OVERALL_EXTERNAL = False` near the top of the
+  script.
+
 ### External walls: outer face (brick walls only)
 
 **Only external walls with brick** get the outer face. A wall counts as
