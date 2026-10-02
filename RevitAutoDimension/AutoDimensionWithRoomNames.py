@@ -119,7 +119,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-02 overall-1"
+SCRIPT_VERSION = "2026-10-02 facade-1"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -939,20 +939,36 @@ def direction_groups(chain):
 # Building the dimension
 # ----------------------------------------------------------------------------
 
-# Also snap to the outermost external walls at each end of the string, even
-# where the line doesn't reach them (brick: outer face of the brick; other
-# external walls: outer face of the Structure layer).
+# Also snap to external walls the line doesn't cross:
+#   - ADD_OVERALL_EXTERNAL: the outermost external wall at each end;
+#   - ADD_FACADE_STEPS: every step in the facade you'd see looking back at
+#     the house from the line's side (each return wall where the outline
+#     steps in or out).
+# Brick walls give the outer face of the brick; other external walls the
+# outer face of their Structure layer.
 ADD_OVERALL_EXTERNAL = True
+ADD_FACADE_STEPS = True
+STEP_MATCH_TOL = 0.05        # ~15 mm: a return wall face this close to a step
 
 
-def overall_external_extremes(view, axis, members, notes):
-    """[(s, Reference), ...] for the outermost external wall at each end
-    of the string, across every external wall visible in the view. s is
-    the distance along the axis, measured like the drawn lines."""
-    first = members[0]
-    dim_line = Line.CreateBound(XYZ(first.a.X, first.a.Y, first.z),
-                                XYZ(first.b.X, first.b.Y, first.z))
-    lo = hi = None      # (s, wall, ext_face_ref, sign)
+def _face_extent(face, axis, perp, first):
+    """(s min, s max, perp min, perp max) of a planar face, from its UV
+    bounds. s = distance along the axis, measured like the drawn lines."""
+    bb = face.GetBoundingBox()
+    ss, ds = [], []
+    for u in (bb.Min.U, bb.Max.U):
+        for v in (bb.Min.V, bb.Max.V):
+            p = flat(face.Evaluate(UV(u, v)))
+            ss.append(p.Subtract(first.a).DotProduct(axis) + first.s_a)
+            ds.append(p.DotProduct(perp))
+    return min(ss), max(ss), min(ds), max(ds)
+
+
+def _external_faces(view, axis, perp, first):
+    """Exterior faces of the external walls in the view, split into
+    facade faces (square to perp: they run along the string) and return
+    faces (square to the axis: the string can measure to them)."""
+    facades, returns = [], []
     for wall in collect_walls(view):
         try:
             if wall.WallType.Kind == WallKind.Curtain or not is_external(wall):
@@ -968,48 +984,136 @@ def overall_external_extremes(view, axis, members, notes):
                 n = flat(face.FaceNormal)
                 if n.GetLength() < 1e-9:
                     continue
-                d = n.Normalize().DotProduct(axis)
-                if abs(d) < PARALLEL_COS:
-                    continue            # not square to the string
-                s = (flat(face.Origin).Subtract(first.a).DotProduct(axis)
-                     + first.s_a)
-                # The outer face at the low end points back along the
-                # axis; at the high end it points forward.
-                if d < 0 and (lo is None or s < lo[0]):
-                    lo = (s, wall, ref, -1.0)
-                if d > 0 and (hi is None or s > hi[0]):
-                    hi = (s, wall, ref, 1.0)
+                n = n.Normalize()
+                s0, s1, d0, d1 = _face_extent(face, axis, perp, first)
+                if abs(n.DotProduct(perp)) >= PARALLEL_COS:
+                    side = 1.0 if n.DotProduct(perp) > 0 else -1.0
+                    facades.append((side, s0, s1, (d0 + d1) / 2.0))
+                elif abs(n.DotProduct(axis)) >= PARALLEL_COS:
+                    s = (flat(face.Origin).Subtract(first.a).DotProduct(axis)
+                         + first.s_a)
+                    sign = 1.0 if n.DotProduct(axis) > 0 else -1.0
+                    returns.append((s, sign, d0, d1, wall, ref))
             except Exception:
                 continue
+    return facades, returns
 
-    out = []
-    for found in (lo, hi):
-        if found is None:
+
+def _outer_point(wall, ext_ref, s, sign, dim_line, view, notes):
+    """(s, Reference) for an external wall's dimension point: the outer
+    face of the brick, or (not brick) the outer face of its Structure
+    layer. None if that face can't be referenced."""
+    if has_brick(wall):
+        return s, ext_ref
+    layers = wall_layers(wall)
+    offsets = structure_offsets(layers) if layers else None
+    if not offsets:
+        return s, ext_ref           # no Structure layer: its outer face
+    offset = offsets[0]
+    try:
+        int_ref = list(HostObjectUtils.GetSideFaces(
+            wall, ShellLayerType.Interior))[0]
+    except Exception:
+        int_ref = None
+    ref = ref_at_offset(wall, view, dim_line, ext_ref, int_ref, offset,
+                        sum(layers[0])) if int_ref is not None else None
+    if ref is None:
+        notes.append("Wall %s: outer face of its Structure layer not found"
+                     % wall.Id)
+        return None
+    return s - sign * offset, ref
+
+
+def _facade_steps(facades, line_d):
+    """Steps in the facade seen from the line: [(s, depth a, depth b)].
+    Uses the facade side nearer the line, and for each stretch along the
+    string the outermost facade face on that side."""
+    plus = [f for f in facades if f[0] > 0]
+    minus = [f for f in facades if f[0] < 0]
+    if not plus and not minus:
+        return []
+    far_plus = max(f[3] for f in plus) if plus else None
+    far_minus = min(f[3] for f in minus) if minus else None
+    if far_minus is None or (far_plus is not None and
+                             abs(far_plus - line_d) <= abs(line_d - far_minus)):
+        side, faces = 1.0, plus
+    else:
+        side, faces = -1.0, minus
+    cuts = sorted(set([f[1] for f in faces] + [f[2] for f in faces]))
+    profile = []        # (s start, s end, depth or None)
+    for s0, s1 in zip(cuts, cuts[1:]):
+        if s1 - s0 < DEDUP_TOL:
             continue
-        s, wall, ext_ref, sign = found
-        if has_brick(wall):
-            out.append((s, ext_ref))        # outside of the brick
+        mid = (s0 + s1) / 2.0
+        covering = [f[3] for f in faces
+                    if f[1] - DEDUP_TOL <= mid <= f[2] + DEDUP_TOL]
+        depth = (max(covering) if side > 0 else min(covering)) \
+            if covering else None
+        profile.append((s0, s1, depth))
+    steps = []
+    previous = None
+    for s0, s1, depth in profile:
+        if previous is not None:
+            if (previous[2] is None) != (depth is None) or (
+                    depth is not None and previous[2] is not None
+                    and abs(depth - previous[2]) > DEDUP_TOL):
+                a = previous[2] if previous[2] is not None else depth
+                b = depth if depth is not None else previous[2]
+                steps.append((s0, a, b))
+        previous = (s0, s1, depth)
+    if profile and profile[0][2] is not None:
+        steps.insert(0, (profile[0][0], profile[0][2], profile[0][2]))
+    if profile and profile[-1][2] is not None:
+        steps.append((profile[-1][1], profile[-1][2], profile[-1][2]))
+    return steps
+
+
+def external_points(view, axis, members, notes):
+    """[(s, Reference)] for external walls the line doesn't have to cross:
+    the outermost external wall at each end, and the steps in the facade
+    seen from the line's side."""
+    first = members[0]
+    perp = XYZ(-axis.Y, axis.X, 0.0)
+    dim_line = Line.CreateBound(XYZ(first.a.X, first.a.Y, first.z),
+                                XYZ(first.b.X, first.b.Y, first.z))
+    facades, returns = _external_faces(view, axis, perp, first)
+    picked = []     # (s, sign, wall, ref)
+
+    if ADD_OVERALL_EXTERNAL:
+        lows = [r for r in returns if r[1] < 0]
+        highs = [r for r in returns if r[1] > 0]
+        if lows:
+            r = min(lows, key=lambda r: r[0])
+            picked.append((r[0], r[1], r[4], r[5]))
+        if highs:
+            r = max(highs, key=lambda r: r[0])
+            picked.append((r[0], r[1], r[4], r[5]))
+
+    if ADD_FACADE_STEPS:
+        line_d = first.a.DotProduct(perp)
+        for s, depth_a, depth_b in _facade_steps(facades, line_d):
+            lo, hi = min(depth_a, depth_b), max(depth_a, depth_b)
+            best, best_overlap = None, -1.0
+            for r in returns:
+                if abs(r[0] - s) > STEP_MATCH_TOL:
+                    continue
+                overlap = min(hi, r[3]) - max(lo, r[2])
+                if overlap < -STEP_MATCH_TOL:
+                    continue        # a return wall elsewhere along the line
+                if overlap > best_overlap:
+                    best, best_overlap = r, overlap
+            if best is not None:
+                picked.append((best[0], best[1], best[4], best[5]))
+
+    out, seen = [], set()
+    for s, sign, wall, ref in picked:
+        key = (str(wall.Id), round(s, 3))
+        if key in seen:
             continue
-        # Not brick: outer face of the Structure layer, offset in from the
-        # exterior face by the layers outside it.
-        layers = wall_layers(wall)
-        offsets = structure_offsets(layers) if layers else None
-        if not offsets:
-            out.append((s, ext_ref))        # no Structure layer: outer face
-            continue
-        offset = offsets[0]
-        try:
-            int_ref = list(HostObjectUtils.GetSideFaces(
-                wall, ShellLayerType.Interior))[0]
-        except Exception:
-            int_ref = None
-        ref = ref_at_offset(wall, view, dim_line, ext_ref, int_ref, offset,
-                            sum(layers[0])) if int_ref is not None else None
-        if ref is None:
-            notes.append("Wall %s: outer face of its Structure layer not "
-                         "found for the overall end" % wall.Id)
-            continue
-        out.append((s - sign * offset, ref))
+        seen.add(key)
+        point = _outer_point(wall, ref, s, sign, dim_line, view, notes)
+        if point is not None:
+            out.append(point)
     return out
 
 
@@ -1024,14 +1128,11 @@ def group_hits(view, axis, members, include_others, stats, notes, pick_z):
                                         dim_line, include_others,
                                         stats, notes, pick_z):
             hits.append((line.s_a + t, ref))
-    if ADD_OVERALL_EXTERNAL and hits:
+    if (ADD_OVERALL_EXTERNAL or ADD_FACADE_STEPS) and hits:
         # Only for a run that crosses walls, so a jog between runs doesn't
-        # get a string of its own. Only added beyond the faces the line
-        # already crosses.
-        lo_s = min(h[0] for h in hits)
-        hi_s = max(h[0] for h in hits)
-        for s, ref in overall_external_extremes(view, axis, members, notes):
-            if s < lo_s - DEDUP_TOL or s > hi_s + DEDUP_TOL:
+        # get a string of its own. Points the line already has are skipped.
+        for s, ref in external_points(view, axis, members, notes):
+            if all(abs(s - h[0]) >= DEDUP_TOL for h in hits):
                 hits.append((s, ref))
                 stats["overall"] += 1
     hits.sort(key=lambda h: h[0])
@@ -1136,7 +1237,8 @@ def dimension_group(view, axis, members, dim_type, include_number, rooms,
 
     parts = ["%d on Structure layer" % stats["structure"],
              "%d brick external with outer face" % stats["outer"],
-             "%d overall external end(s) added" % stats["overall"]]
+             "%d external wall point(s) added beyond the line"
+             % stats["overall"]]
     if include_others:
         parts.append("%d on core" % stats["core"])
         parts.append("%d on finish faces" % stats["finish"])

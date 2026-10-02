@@ -78,23 +78,31 @@ So in each wall type, put the two *Core Boundary* rows **directly either
 side of the Structure layer**. The dimensions then attach to the wall and
 update if it moves or changes type.
 
-### Overall ends: outermost external walls
+### External walls the line doesn't cross: overall ends and facade steps
 
-The string also snaps to the **outermost external wall at each end**, even
-where your line doesn't reach it, so it always shows the overall size:
+Picture yourself standing on the line and **looking back at the house**.
+Every external wall corner you'd see along the facade on that side is
+added to the string, even where the line doesn't cross that wall:
 
-| Outermost external wall is... | Snaps to |
+- **Facade steps:** wherever the outer wall line steps in or out (the
+  wall returns at each corner of the facade).
+- **Overall ends:** the outermost external wall at each end of the string.
+
+| That external wall is... | Snaps to |
 |---|---|
 | **Brick** | the **outer face of the brick** |
 | **Not brick** | the **outer face of the 90 mm Structure layer** (frame) |
 
-- It looks at every **external** wall (type Function = Exterior) visible in
-  the view. Internal walls never count.
-- An end point is only added if that wall is **beyond** the walls the line
-  already crosses, so nothing doubles up.
-- The report counts them, e.g. `2 overall external end(s) added`.
-- To turn this off, set `ADD_OVERALL_EXTERNAL = False` near the top of the
-  script.
+- **Which facade:** the one on the side of the house **nearest your
+  line**. Steps on the far side of the house aren't included.
+- Only **external** walls count (type Function = Exterior). Points the line
+  already picks up aren't repeated.
+- The report counts them, e.g. `5 external wall point(s) added beyond the line`.
+- To turn these off, set `ADD_FACADE_STEPS = False` and/or
+  `ADD_OVERALL_EXTERNAL = False` near the top of the script.
+- The view's external walls are all considered. On a plan showing a
+  detached garage or another building, crop or hide it if its walls
+  shouldn't count.
 
 ### External walls: outer face (brick walls only)
 
