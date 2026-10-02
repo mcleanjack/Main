@@ -21,6 +21,8 @@
 #   4. Writes the new values to each window's "Mark" parameter (Identity
 #      Data) in a single transaction, so one Ctrl+Z in Revit undoes it all.
 #      Tags read the Mark, so they update automatically.
+#   5. Shows the settings dialog again (with the last result), so you can
+#      renumber another set straight away. Click Done to finish the Run.
 #
 # Windows you DIDN'T click (visible in the active view) are, depending on the
 # option chosen in the dialog, either:
@@ -81,7 +83,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v8 (Manual mode detected as 0)"
+SCRIPT_VERSION = "v9 (renumber repeatedly in one Run)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -200,7 +202,7 @@ def guess_format(windows):
 # ----------------------------------------------------------------------------
 
 class SettingsForm(Form):
-    def __init__(self, prefix, digits):
+    def __init__(self, prefix, digits, last_result=None, settings=None):
         Form.__init__(self)
         self.Text = "Renumber Window Marks by Clicking"
         self.FormBorderStyle = FormBorderStyle.FixedDialog
@@ -303,6 +305,19 @@ class SettingsForm(Form):
         cancel.DialogResult = DialogResult.Cancel
         self.Controls.Add(cancel)
         self.CancelButton = cancel
+
+        # Shown again after each renumber: report the last result, keep the
+        # last settings, and turn Cancel into Done.
+        if last_result is not None:
+            self.Text = "Renumber Window Marks - renumber more, or click Done"
+            cancel.Text = "Done"
+            hint.Text = "Last run: " + last_result + "\n" + hint.Text
+            hint.Size = Size(390, 50)
+        if settings is not None:
+            self.start_box.Text = str(settings["start"])
+            if settings["continue_others"]:
+                self.continue_radio.Checked = True
+            self.preview_check.Checked = settings["show_preview"]
 
     def get_start(self):
         return parse_int(self.start_box.Text, 1, 0, 99999)
@@ -518,6 +533,98 @@ changed_count = 0
 report_lines = []
 status_message = ""
 
+def run_one_renumber(view, form):
+    """Pick + renumber once, using the settings in `form`. Returns a short
+    status string. Changes are committed before returning, so the next
+    round can pick again."""
+    global changed_count
+    view_windows = collect_view_windows(view)
+    prefix = form.prefix_box.Text
+    start = form.get_start()
+    digits = form.get_digits()
+    continue_others = bool(form.continue_radio.Checked)
+    show_preview = bool(form.preview_check.Checked)
+
+    picked, cancelled = pick_windows_in_order()
+    # Keep the clicked windows highlighted until this round is done.
+    highlight([w.Id for w in picked])
+    try:
+        if cancelled:
+            return "Picking cancelled. No changes made."
+        if not picked:
+            return "No windows were clicked. No changes made."
+
+        # Build the new numbering plan: clicked windows first, then
+        # (optionally) the unclicked windows in their current order.
+        picked_ints = set(eid_to_int(w.Id) for w in picked)
+        others = [w for w in view_windows if eid_to_int(w.Id) not in picked_ints]
+        plan = list(picked)
+        if continue_others:
+            plan += sorted(others, key=lambda w: (natural_key(get_mark(w)), eid_to_int(w.Id)))
+
+        assignments = []   # (window, old, new)
+        for i, w in enumerate(plan):
+            assignments.append((w, get_mark(w), format_mark(prefix, start + i, digits)))
+
+        # Duplicates against windows we're not renumbering.
+        # Same Mark in two DIFFERENT Design Options is intentional
+        # and is never reported or changed.
+        new_mark_options = {}
+        for (w, _, new) in assignments:
+            new_mark_options.setdefault(new, []).append(option_key(w))
+        planned_ints = set(eid_to_int(a[0].Id) for a in assignments)
+        clashes = [w for w in view_windows
+                   if eid_to_int(w.Id) not in planned_ints
+                   and any(options_clash(option_key(w), k)
+                           for k in new_mark_options.get(get_mark(w), []))]
+
+        if show_preview:
+            preview = ["{0:<10} -> {1}".format(old or "<blank>", new)
+                       for (_, old, new) in assignments]
+            summary = "{0} window(s) clicked".format(len(picked))
+            if continue_others:
+                summary += ", {0} other(s) numbered after them".format(len(plan) - len(picked))
+            body = "\n".join(preview[:40])
+            if len(preview) > 40:
+                body += "\n... and {0} more".format(len(preview) - 40)
+            if clashes:
+                body += "\n\nWARNING - these unclicked windows already use one of the new Marks " \
+                        "and will become duplicates:\n" + \
+                        "\n".join(sorted(set(get_mark(w) for w in clashes), key=natural_key))
+            if PreviewForm(summary + ". Apply?", body).ShowDialog() != DialogResult.OK:
+                return "Cancelled at preview. No changes made."
+
+        changed_here = 0
+        TransactionManager.Instance.EnsureInTransaction(doc)
+        for w, old, new in assignments:
+            p = w.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)
+            if p is None or p.IsReadOnly:
+                report_lines.append("SKIPPED {0}: Mark is read-only (id {1})".format(old, eid_to_int(w.Id)))
+                continue
+            renamed_windows.append(w)
+            if old == new:
+                report_lines.append("{0} unchanged".format(old))
+                continue
+            p.Set(new)
+            changed_here += 1
+            report_lines.append("{0} -> {1}".format(old or "<blank>", new))
+        TransactionManager.Instance.TransactionTaskDone()
+        # Commit now so the next round can pick again (Revit doesn't allow
+        # picking while a transaction is open).
+        TransactionManager.Instance.ForceCloseTransaction()
+        changed_count += changed_here
+
+        for w in clashes:
+            report_lines.append("DUPLICATE: unclicked window id {0} still has Mark {1}".format(
+                eid_to_int(w.Id), get_mark(w)))
+
+        return "{0} window Mark(s) changed{1}.".format(
+            changed_here,
+            "; {0} duplicate(s) left - see report".format(len(clashes)) if clashes else "")
+    finally:
+        highlight([])
+
+
 try:
     run_trigger = True
     try:
@@ -535,90 +642,31 @@ try:
         debug_info.append("Active view: {0}".format(view.Name))
         debug_info.append("Windows visible in active view: {0}".format(len(view_windows)))
 
+        # Keep going until the user clicks Cancel / Done, so several
+        # renumbers can be done in one Run without re-running Dynamo.
         guess_prefix, guess_digits = guess_format(view_windows)
-        form = SettingsForm(guess_prefix, guess_digits)
-        if form.ShowDialog() != DialogResult.OK:
+        last_result = None
+        settings = None
+        rounds = 0
+        while True:
+            form = SettingsForm(guess_prefix, guess_digits, last_result, settings)
+            if form.ShowDialog() != DialogResult.OK:
+                break
+            guess_prefix, guess_digits = form.prefix_box.Text, form.get_digits()
+            settings = {
+                "start": form.get_start(),
+                "continue_others": bool(form.continue_radio.Checked),
+                "show_preview": bool(form.preview_check.Checked),
+            }
+            rounds += 1
+            last_result = run_one_renumber(view, form)
+            report_lines.append("--- Round {0}: {1}".format(rounds, last_result))
+
+        if rounds == 0:
             status_message = "Cancelled by user. No changes made."
         else:
-            prefix = form.prefix_box.Text
-            start = form.get_start()
-            digits = form.get_digits()
-            continue_others = bool(form.continue_radio.Checked)
-
-            show_preview = bool(form.preview_check.Checked)
-
-            picked, cancelled = pick_windows_in_order()
-            # Keep the clicked windows highlighted until the script ends.
-            highlight([w.Id for w in picked])
-
-            if cancelled:
-                status_message = "Picking cancelled. No changes made."
-            elif not picked:
-                status_message = "No windows were clicked. No changes made."
-            else:
-                # Build the new numbering plan: clicked windows first, then
-                # (optionally) the unclicked windows in their current order.
-                picked_ints = set(eid_to_int(w.Id) for w in picked)
-                others = [w for w in view_windows if eid_to_int(w.Id) not in picked_ints]
-                plan = list(picked)
-                if continue_others:
-                    plan += sorted(others, key=lambda w: (natural_key(get_mark(w)), eid_to_int(w.Id)))
-
-                assignments = []   # (window, old, new)
-                for i, w in enumerate(plan):
-                    assignments.append((w, get_mark(w), format_mark(prefix, start + i, digits)))
-
-                # Duplicates against windows we're not renumbering
-                # Same Mark in two DIFFERENT Design Options is intentional
-                # and is never reported or changed.
-                new_mark_options = {}
-                for (w, _, new) in assignments:
-                    new_mark_options.setdefault(new, []).append(option_key(w))
-                planned_ints = set(eid_to_int(a[0].Id) for a in assignments)
-                clashes = [w for w in view_windows
-                           if eid_to_int(w.Id) not in planned_ints
-                           and any(options_clash(option_key(w), k)
-                                   for k in new_mark_options.get(get_mark(w), []))]
-
-                preview = ["{0:<10} -> {1}".format(old or "<blank>", new)
-                           for (_, old, new) in assignments]
-                summary = "{0} window(s) clicked".format(len(picked))
-                if continue_others:
-                    summary += ", {0} other(s) numbered after them".format(len(plan) - len(picked))
-                body = "\n".join(preview[:40])
-                if len(preview) > 40:
-                    body += "\n... and {0} more".format(len(preview) - 40)
-                if clashes:
-                    body += "\n\nWARNING - these unclicked windows already use one of the new Marks " \
-                            "and will become duplicates:\n" + \
-                            "\n".join(sorted(set(get_mark(w) for w in clashes), key=natural_key))
-
-                if show_preview and PreviewForm(summary + ". Apply?", body).ShowDialog() != DialogResult.OK:
-                    status_message = "Cancelled at preview. No changes made."
-                else:
-                    TransactionManager.Instance.EnsureInTransaction(doc)
-                    for w, old, new in assignments:
-                        p = w.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)
-                        if p is None or p.IsReadOnly:
-                            report_lines.append("SKIPPED {0}: Mark is read-only (id {1})".format(old, eid_to_int(w.Id)))
-                            continue
-                        if old == new:
-                            report_lines.append("{0} unchanged".format(old))
-                            renamed_windows.append(w)
-                            continue
-                        p.Set(new)
-                        renamed_windows.append(w)
-                        changed_count += 1
-                        report_lines.append("{0} -> {1}".format(old or "<blank>", new))
-                    TransactionManager.Instance.TransactionTaskDone()
-
-                    for w in clashes:
-                        report_lines.append("DUPLICATE: unclicked window id {0} still has Mark {1}".format(
-                            eid_to_int(w.Id), get_mark(w)))
-
-                    status_message = "Completed: {0} window Mark(s) changed{1}.".format(
-                        changed_count,
-                        "; {0} duplicate(s) left - see report".format(len(clashes)) if clashes else "")
+            status_message = "Completed: {0} round(s), {1} window Mark(s) changed.".format(
+                rounds, changed_count)
 
 except Exception:
     status_message = "The tool encountered an error and stopped safely. See debug info for details."
