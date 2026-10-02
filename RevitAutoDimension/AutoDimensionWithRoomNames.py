@@ -119,7 +119,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-02 facade-1"
+SCRIPT_VERSION = "2026-10-02 facade-2"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -941,9 +941,11 @@ def direction_groups(chain):
 
 # Also snap to external walls the line doesn't cross:
 #   - ADD_OVERALL_EXTERNAL: the outermost external wall at each end;
-#   - ADD_FACADE_STEPS: every step in the facade you'd see looking back at
-#     the house from the line's side (each return wall where the outline
-#     steps in or out).
+#   - ADD_FACADE_STEPS: every external corner you can see standing on the
+#     line: outer wall faces that face back towards the line (nearest one
+#     at each point), and each return wall where that outline steps in or
+#     out. Corners on walls facing away from the line (e.g. the far jog
+#     of an S-shaped wall the line cuts through) aren't included.
 # Brick walls give the outer face of the brick; other external walls the
 # outer face of their Structure layer.
 ADD_OVERALL_EXTERNAL = True
@@ -1024,21 +1026,10 @@ def _outer_point(wall, ext_ref, s, sign, dim_line, view, notes):
     return s - sign * offset, ref
 
 
-def _facade_steps(facades, line_d):
-    """Steps in the facade seen from the line: [(s, depth a, depth b)].
-    Uses the facade side nearer the line, and for each stretch along the
-    string the outermost facade face on that side."""
-    plus = [f for f in facades if f[0] > 0]
-    minus = [f for f in facades if f[0] < 0]
-    if not plus and not minus:
-        return []
-    far_plus = max(f[3] for f in plus) if plus else None
-    far_minus = min(f[3] for f in minus) if minus else None
-    if far_minus is None or (far_plus is not None and
-                             abs(far_plus - line_d) <= abs(line_d - far_minus)):
-        side, faces = 1.0, plus
-    else:
-        side, faces = -1.0, minus
+def _profile_steps(faces, nearest):
+    """Steps in one side's visible outline: [(s, depth a, depth b)].
+    faces: [(side, s0, s1, depth)]; nearest picks the face seen at each
+    point along the string (the one closest to the line)."""
     cuts = sorted(set([f[1] for f in faces] + [f[2] for f in faces]))
     profile = []        # (s start, s end, depth or None)
     for s0, s1 in zip(cuts, cuts[1:]):
@@ -1047,9 +1038,7 @@ def _facade_steps(facades, line_d):
         mid = (s0 + s1) / 2.0
         covering = [f[3] for f in faces
                     if f[1] - DEDUP_TOL <= mid <= f[2] + DEDUP_TOL]
-        depth = (max(covering) if side > 0 else min(covering)) \
-            if covering else None
-        profile.append((s0, s1, depth))
+        profile.append((s0, s1, nearest(covering) if covering else None))
     steps = []
     previous = None
     for s0, s1, depth in profile:
@@ -1065,6 +1054,28 @@ def _facade_steps(facades, line_d):
         steps.insert(0, (profile[0][0], profile[0][2], profile[0][2]))
     if profile and profile[-1][2] is not None:
         steps.append((profile[-1][1], profile[-1][2], profile[-1][2]))
+    return steps
+
+
+def _facade_steps(facades, line_d):
+    """Corners of the external walls you can see standing on the line:
+    [(s, depth a, depth b)].
+
+    A facade face (an exterior face running along the string) is only
+    visible if it faces back towards the line - e.g. looking north from
+    the line you see the south-facing outer walls north of it, not the
+    ones behind you or facing away. On each side of the line, the face
+    nearest the line is the one seen at each point along the string, and
+    every place that outline steps in or out is a corner to dimension."""
+    ahead = [f for f in facades
+             if f[3] > line_d + DEDUP_TOL and f[0] < 0]     # faces back
+    behind = [f for f in facades
+              if f[3] < line_d - DEDUP_TOL and f[0] > 0]    # faces back
+    steps = []
+    if ahead:
+        steps.extend(_profile_steps(ahead, min))
+    if behind:
+        steps.extend(_profile_steps(behind, max))
     return steps
 
 

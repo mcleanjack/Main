@@ -80,9 +80,9 @@ update if it moves or changes type.
 
 ### External walls the line doesn't cross: overall ends and facade steps
 
-Picture yourself standing on the line and **looking back at the house**.
-Every external wall corner you'd see along the facade on that side is
-added to the string, even where the line doesn't cross that wall:
+Picture yourself standing on the line and looking out from it. Every
+external wall corner you can **see** is added to the string, even where
+the line doesn't cross that wall:
 
 - **Facade steps:** wherever the outer wall line steps in or out (the
   wall returns at each corner of the facade).
@@ -93,8 +93,14 @@ added to the string, even where the line doesn't cross that wall:
 | **Brick** | the **outer face of the brick** |
 | **Not brick** | the **outer face of the 90 mm Structure layer** (frame) |
 
-- **Which facade:** the one on the side of the house **nearest your
-  line**. Steps on the far side of the house aren't included.
+- **What counts as "seen":** an outer wall face only counts if it **faces
+  back towards the line**. At each point along the string, only the face
+  **nearest the line** counts, so walls hidden behind it don't. Its
+  corners (where that outline steps in or out) are dimensioned.
+- **S-shaped walls:** where the line cuts through an S-shaped external
+  wall, only the corner on the jog that faces the line is picked up. The
+  jog facing away (on the other side of the line) isn't, because you
+  can't see that face from the line.
 - Only **external** walls count (type Function = Exterior). Points the line
   already picks up aren't repeated.
 - The report counts them, e.g. `5 external wall point(s) added beyond the line`.
