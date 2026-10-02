@@ -81,7 +81,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v11 (no idle re-run marking)"
+SCRIPT_VERSION = "v12 (click order fixed)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -426,7 +426,9 @@ def pick_windows_in_order():
 
     windows = []
     seen = set()
-    for ref in refs:
+    # Revit hands back PickObjects results newest-first, so reverse them
+    # to get the order they were clicked in.
+    for ref in reversed(list(refs)):
         window, reason = window_from_picked(doc.GetElement(ref.ElementId))
         if window is None:
             debug_info.append("Ignored pick: " + reason)
