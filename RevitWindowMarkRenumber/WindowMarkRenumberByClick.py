@@ -81,7 +81,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v6 (re-run fix)"
+SCRIPT_VERSION = "v7 (re-run diagnostics)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -453,12 +453,25 @@ def mark_graph_for_rerun():
     the run finishes, so the marking is done again once Dynamo reports the
     run as completed (EvaluationCompleted). The handler removes itself after
     firing once."""
+    workspace = None
+    errors = []
     try:
         clr.AddReference('DynamoRevitDS')
         from Dynamo.Applications import DynamoRevit
-        workspace = DynamoRevit.RevitDynamoModel.CurrentWorkspace
     except Exception:
-        debug_info.append("Re-run setup: could not reach the Dynamo workspace: " + traceback.format_exc())
+        debug_info.append("Re-run setup: could not load DynamoRevitDS: " + traceback.format_exc())
+        return False
+    for label, get_model in (("static", lambda: DynamoRevit.RevitDynamoModel),
+                             ("instance", lambda: DynamoRevit().RevitDynamoModel)):
+        try:
+            workspace = get_model().CurrentWorkspace
+            debug_info.append("Re-run setup: reached workspace via {0} RevitDynamoModel ({1} nodes).".format(
+                label, len(list(workspace.Nodes))))
+            break
+        except Exception as ex:
+            errors.append("{0}: {1}".format(label, ex))
+    if workspace is None:
+        debug_info.append("Re-run setup: could not reach the Dynamo workspace: " + " | ".join(errors))
         return False
 
     try:
