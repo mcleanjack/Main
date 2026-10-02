@@ -21,8 +21,6 @@
 #   4. Writes the new values to each window's "Mark" parameter (Identity
 #      Data) in a single transaction, so one Ctrl+Z in Revit undoes it all.
 #      Tags read the Mark, so they update automatically.
-#   5. Shows the settings dialog again (with the last result), so you can
-#      renumber another set straight away. Click Done to finish the Run.
 #
 # Windows you DIDN'T click (visible in the active view) are, depending on the
 # option chosen in the dialog, either:
@@ -83,7 +81,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v9 (renumber repeatedly in one Run)"
+SCRIPT_VERSION = "v10 (finish ends the run, idle re-run marking)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -202,7 +200,7 @@ def guess_format(windows):
 # ----------------------------------------------------------------------------
 
 class SettingsForm(Form):
-    def __init__(self, prefix, digits, last_result=None, settings=None):
+    def __init__(self, prefix, digits):
         Form.__init__(self)
         self.Text = "Renumber Window Marks by Clicking"
         self.FormBorderStyle = FormBorderStyle.FixedDialog
@@ -305,19 +303,6 @@ class SettingsForm(Form):
         cancel.DialogResult = DialogResult.Cancel
         self.Controls.Add(cancel)
         self.CancelButton = cancel
-
-        # Shown again after each renumber: report the last result, keep the
-        # last settings, and turn Cancel into Done.
-        if last_result is not None:
-            self.Text = "Renumber Window Marks - renumber more, or click Done"
-            cancel.Text = "Done"
-            hint.Text = "Last run: " + last_result + "\n" + hint.Text
-            hint.Size = Size(390, 50)
-        if settings is not None:
-            self.start_box.Text = str(settings["start"])
-            if settings["continue_others"]:
-                self.continue_radio.Checked = True
-            self.preview_check.Checked = settings["show_preview"]
 
     def get_start(self):
         return parse_int(self.start_box.Text, 1, 0, 99999)
@@ -515,13 +500,36 @@ def mark_graph_for_rerun():
         except Exception:
             pass
 
+    hooked = []
     try:
         workspace.EvaluationCompleted += on_completed
-        debug_info.append("Re-run setup: OK - press Run again to renumber again.")
-        return True
+        hooked.append("EvaluationCompleted")
     except Exception:
         debug_info.append("Re-run setup: could not hook EvaluationCompleted: " + traceback.format_exc())
-        return False
+
+    # Most reliable: queue the marking on Revit's UI thread at idle priority.
+    # This node is running on that thread, so the queued call only happens
+    # once Dynamo has completely finished this run and tidied up.
+    try:
+        clr.AddReference('WindowsBase')
+        from System.Windows.Threading import Dispatcher, DispatcherPriority
+        from System import Action
+
+        def mark_later():
+            try:
+                _mark_all_nodes_modified(workspace)
+            except Exception:
+                pass
+
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, Action(mark_later))
+        hooked.append("Dispatcher idle")
+    except Exception:
+        debug_info.append("Re-run setup: could not queue idle marking: " + traceback.format_exc())
+
+    if hooked:
+        debug_info.append("Re-run setup: OK ({0}) - press Run again to renumber again.".format(", ".join(hooked)))
+        return True
+    return False
 
 
 # ----------------------------------------------------------------------------
@@ -642,31 +650,12 @@ try:
         debug_info.append("Active view: {0}".format(view.Name))
         debug_info.append("Windows visible in active view: {0}".format(len(view_windows)))
 
-        # Keep going until the user clicks Cancel / Done, so several
-        # renumbers can be done in one Run without re-running Dynamo.
         guess_prefix, guess_digits = guess_format(view_windows)
-        last_result = None
-        settings = None
-        rounds = 0
-        while True:
-            form = SettingsForm(guess_prefix, guess_digits, last_result, settings)
-            if form.ShowDialog() != DialogResult.OK:
-                break
-            guess_prefix, guess_digits = form.prefix_box.Text, form.get_digits()
-            settings = {
-                "start": form.get_start(),
-                "continue_others": bool(form.continue_radio.Checked),
-                "show_preview": bool(form.preview_check.Checked),
-            }
-            rounds += 1
-            last_result = run_one_renumber(view, form)
-            report_lines.append("--- Round {0}: {1}".format(rounds, last_result))
-
-        if rounds == 0:
+        form = SettingsForm(guess_prefix, guess_digits)
+        if form.ShowDialog() != DialogResult.OK:
             status_message = "Cancelled by user. No changes made."
         else:
-            status_message = "Completed: {0} round(s), {1} window Mark(s) changed.".format(
-                rounds, changed_count)
+            status_message = "Completed: " + run_one_renumber(view, form)
 
 except Exception:
     status_message = "The tool encountered an error and stopped safely. See debug info for details."

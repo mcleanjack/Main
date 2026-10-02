@@ -51,13 +51,6 @@ never changes it or flags it:
 - The duplicate check only ever **reports**. It never renumbers a window
   you didn't click.
 
-### Renumbering more than once
-
-After each renumber, the settings dialog comes back with the last result and
-your last settings. Click **Start Picking** to renumber another set, or
-**Done** to finish. Each renumber is committed as it happens, so you can do
-as many as you like in one Run without touching the Dynamo graph.
-
 ## Building the graph in Dynamo
 
 1. In Revit: **Manage → Dynamo**, then start a new graph.
