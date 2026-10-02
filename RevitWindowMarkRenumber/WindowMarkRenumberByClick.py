@@ -76,8 +76,9 @@ from System.Collections.Generic import List as NetList
 from System.Windows.Forms import (
     Form, Label, TextBox, Button, RadioButton, GroupBox, CheckBox,
     DialogResult, FormStartPosition, FormBorderStyle, ScrollBars,
-    Screen, SendKeys, Application
+    Screen, Application, Timer
 )
+from System.Threading import Thread, ThreadStart, ApartmentState
 from System.Drawing import Point, Size
 from System.Drawing import Color as DrawingColor
 
@@ -107,7 +108,7 @@ def set_mode(key):
 
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v19 (Finish button fix)"
+SCRIPT_VERSION = "v20 (Finish window on its own thread)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -550,14 +551,37 @@ class PickHighlighter(object):
         self._run("Renumber: clear highlight", action)
 
 
+def _press_esc_in_revit(log):
+    """Bring Revit to the front and press Esc, which ends the waiting
+    PickObject (the same as pressing Esc yourself)."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+        hwnd = uiapp.MainWindowHandle
+        try:
+            hwnd = hwnd.ToInt64()
+        except Exception:
+            hwnd = int(str(hwnd))
+        log.append("focus Revit: {0}".format(bool(user32.SetForegroundWindow(hwnd))))
+        VK_ESCAPE, KEYEVENTF_KEYUP = 0x1B, 0x0002
+        user32.keybd_event(VK_ESCAPE, 0, 0, 0)
+        user32.keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0)
+        log.append("Esc sent")
+    except Exception as ex:
+        log.append("Esc failed: {0}".format(ex))
+
+
 class FinishForm(Form):
     """Small always-on-top window with Finish / Cancel buttons, shown while
-    picking (Revit's own green tick only exists for multi-select, which
-    doesn't keep the click order). A button press sends Esc to Revit to end
-    the current pick."""
+    picking. It runs on its OWN thread, because while Revit waits for a
+    click (PickObject) it doesn't pass clicks to windows on its own thread.
+    Revit's green tick isn't used: it only exists in multi-select mode,
+    which doesn't keep the click order."""
 
-    def __init__(self):
+    def __init__(self, state):
         Form.__init__(self)
+        self.state = state
         self.Text = "Renumber"
         self.FormBorderStyle = FormBorderStyle.FixedToolWindow
         self.StartPosition = FormStartPosition.Manual
@@ -566,11 +590,11 @@ class FinishForm(Form):
         self.ClientSize = Size(230, 95)
         area = Screen.PrimaryScreen.WorkingArea
         self.Location = Point(area.Right - 270, area.Top + 140)
-        self.result = None
 
         self.info = Label()
         self.info.Location = Point(10, 8)
         self.info.Size = Size(210, 36)
+        self.info.Text = state.get("info", "")
         self.Controls.Add(self.info)
 
         finish = Button()
@@ -589,42 +613,54 @@ class FinishForm(Form):
         cancel.Click += self.on_cancel
         self.Controls.Add(cancel)
 
-    def _end_pick(self):
-        """Press Esc in Revit so the waiting PickObject returns. Hiding this
-        window first hands the focus back to Revit, so the Esc lands there
-        and not on this window."""
+        # Pick up the "N picked, next: D.04" text from the picking loop and
+        # close once picking has ended (Esc pressed in Revit, etc.).
+        self.timer = Timer()
+        self.timer.Interval = 200
+        self.timer.Tick += self.on_tick
+        self.timer.Start()
+
+    def on_tick(self, sender, args):
+        if self.state.get("done"):
+            self.timer.Stop()
+            self.Close()
+        elif self.info.Text != self.state.get("info", ""):
+            self.info.Text = self.state.get("info", "")
+
+    def _end(self, result):
+        if self.state.get("done") or self.state.get("result"):
+            return
+        self.state["result"] = result
+        self.Hide()
         log = []
-        try:
-            self.Hide()
-            Application.DoEvents()
-        except Exception as ex:
-            log.append("hide failed: {0}".format(ex))
-        try:
-            import ctypes
-            user32 = ctypes.windll.user32
-            user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
-            hwnd = uiapp.MainWindowHandle
-            try:
-                hwnd = hwnd.ToInt64()
-            except Exception:
-                hwnd = int(str(hwnd))
-            log.append("focus Revit: {0}".format(bool(user32.SetForegroundWindow(hwnd))))
-        except Exception as ex:
-            log.append("focus failed: {0}".format(ex))
-        try:
-            SendKeys.SendWait("{ESC}")
-            log.append("Esc sent")
-        except Exception as ex:
-            log.append("Esc failed: {0}".format(ex))
-        debug_info.append("{0} clicked: {1}".format(self.result, "; ".join(log)))
+        _press_esc_in_revit(log)
+        self.state["log"] = "; ".join(log)
+        self.timer.Stop()
+        self.Close()
 
     def on_finish(self, sender, args):
-        self.result = "finish"
-        self._end_pick()
+        self._end("finish")
 
     def on_cancel(self, sender, args):
-        self.result = "cancel"
-        self._end_pick()
+        self._end("cancel")
+
+
+def start_finish_window(state):
+    """Runs FinishForm on its own STA thread. Returns the thread or None."""
+    def run():
+        try:
+            Application.Run(FinishForm(state))
+        except Exception:
+            state["error"] = traceback.format_exc()
+    try:
+        thread = Thread(ThreadStart(run))
+        thread.SetApartmentState(ApartmentState.STA)
+        thread.IsBackground = True
+        thread.Start()
+        return thread
+    except Exception:
+        debug_info.append("Finish window unavailable: " + traceback.format_exc())
+        return None
 
 
 def pick_windows_in_order(prefix, start, digits, highlighter):
@@ -636,15 +672,12 @@ def pick_windows_in_order(prefix, start, digits, highlighter):
     highlight([])
     windows = []
     seen = set()
-    finish_form = FinishForm()
-    try:
-        finish_form.Show()
-    except Exception:
-        debug_info.append("Finish window unavailable: " + traceback.format_exc())
+    state = {"info": "", "result": None, "done": False}
+    finish_thread = start_finish_window(state)
     try:
         while True:
             next_mark = format_mark(prefix, start + len(windows), digits)
-            finish_form.info.Text = "{0} picked. Next: {1}\nClick Finish when done.".format(
+            state["info"] = "{0} picked. Next: {1}\nClick Finish when done.".format(
                 len(windows), next_mark)
             prompt = "[{0} picked] Click the {1} (or its tag) for {2}  -  Finish (or Esc) when done".format(
                 len(windows), MODE["noun"], next_mark)
@@ -673,11 +706,17 @@ def pick_windows_in_order(prefix, start, digits, highlighter):
             windows.append(window)
             highlighter.add(window)
     finally:
-        try:
-            finish_form.Close()
-        except Exception:
-            pass
-    if finish_form.result == "cancel":
+        state["done"] = True      # closes the Finish window
+        if finish_thread is not None:
+            try:
+                finish_thread.Join(2000)
+            except Exception:
+                pass
+        if state.get("result"):
+            debug_info.append("{0} clicked: {1}".format(state["result"], state.get("log", "")))
+        if state.get("error"):
+            debug_info.append("Finish window error: " + state["error"])
+    if state.get("result") == "cancel":
         return [], True
     return windows, False
 
