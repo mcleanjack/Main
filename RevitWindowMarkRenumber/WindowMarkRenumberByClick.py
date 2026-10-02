@@ -81,7 +81,7 @@ uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 WINDOWS_CAT_ID = ElementId(BuiltInCategory.OST_Windows)
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v10 (finish ends the run, idle re-run marking)"
+SCRIPT_VERSION = "v11 (no idle re-run marking)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -506,25 +506,6 @@ def mark_graph_for_rerun():
         hooked.append("EvaluationCompleted")
     except Exception:
         debug_info.append("Re-run setup: could not hook EvaluationCompleted: " + traceback.format_exc())
-
-    # Most reliable: queue the marking on Revit's UI thread at idle priority.
-    # This node is running on that thread, so the queued call only happens
-    # once Dynamo has completely finished this run and tidied up.
-    try:
-        clr.AddReference('WindowsBase')
-        from System.Windows.Threading import Dispatcher, DispatcherPriority
-        from System import Action
-
-        def mark_later():
-            try:
-                _mark_all_nodes_modified(workspace)
-            except Exception:
-                pass
-
-        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, Action(mark_later))
-        hooked.append("Dispatcher idle")
-    except Exception:
-        debug_info.append("Re-run setup: could not queue idle marking: " + traceback.format_exc())
 
     if hooked:
         debug_info.append("Re-run setup: OK ({0}) - press Run again to renumber again.".format(", ".join(hooked)))
