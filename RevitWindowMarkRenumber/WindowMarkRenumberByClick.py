@@ -36,10 +36,14 @@
 # involving a main-model window, is reported (it is still never changed).
 #
 # IMPORTANT: run the graph in MANUAL run mode (not Automatic), otherwise the
-# picking session restarts every time the graph is re-evaluated. To run it
-# again later, use Dynamo Player, which always re-runs the whole graph.
+# picking session restarts every time the graph is re-evaluated. Just press
+# Run again for the next renumber (see IN[0] below).
 #
-# IN[0] (optional): Boolean "Run" toggle. Defaults to True if not wired.
+# IN[0]: wire a Boolean node here. Its value doesn't matter - at the end of
+#        every run the script flips it (True <-> False). Dynamo only re-runs
+#        a node when an input has changed, so the flip is what lets you press
+#        Run again for the next renumber. Without it, Run only works once.
+#        (Marker used to find this node: RENUMBER-BY-CLICK-NODE)
 #
 # OUT = (renamed_windows, changed_count, report_lines, status_message,
 #        debug_info)
@@ -98,7 +102,7 @@ def set_mode(key):
 
 MARK_RE = re.compile(r'^(.*?)(\d+)$')
 
-SCRIPT_VERSION = "v15 (all doors)"
+SCRIPT_VERSION = "v16 (Run again via Boolean flip)"
 
 debug_info = ["Script version: " + SCRIPT_VERSION]
 
@@ -512,6 +516,42 @@ def pick_windows_in_order():
     return windows, False
 
 
+def arm_rerun():
+    """Flip the Boolean wired into IN[0] so the next press of Run re-runs
+    this node. Changing a node's value changes the graph for real, so
+    Dynamo always re-runs on the next Run - but, unlike marking nodes as
+    modified, it doesn't start a run on its own in Manual mode."""
+    try:
+        clr.AddReference('DynamoRevitDS')
+        from Dynamo.Applications import DynamoRevit
+        workspace = DynamoRevit.RevitDynamoModel.CurrentWorkspace
+    except Exception:
+        debug_info.append("Re-run: could not reach the Dynamo workspace: " + traceback.format_exc())
+        return
+    try:
+        for node in workspace.Nodes:
+            script = getattr(node, "Script", None)
+            if not script or "RENUMBER-BY-CLICK-NODE" not in str(script):
+                continue
+            connectors = list(node.InPorts[0].Connectors)
+            if not connectors:
+                debug_info.append("Re-run: nothing wired into IN[0] - wire a Boolean node there "
+                                  "so Run works more than once.")
+                return
+            source = connectors[0].Start.Owner
+            value = getattr(source, "Value", None)
+            if not isinstance(value, bool):
+                debug_info.append("Re-run: the node wired into IN[0] isn't a Boolean node.")
+                return
+            source.Value = not value
+            debug_info.append("Re-run: OK - Boolean flipped to {0}; press Run to renumber again.".format(
+                not value))
+            return
+        debug_info.append("Re-run: couldn't find this Python node in the graph.")
+    except Exception:
+        debug_info.append("Re-run: failed to flip the Boolean: " + traceback.format_exc())
+
+
 # ----------------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------------
@@ -597,9 +637,6 @@ def run_one_renumber(view, form):
             changed_here += 1
             report_lines.append("{0} -> {1}".format(old or "<blank>", new))
         TransactionManager.Instance.TransactionTaskDone()
-        # Commit now so the next round can pick again (Revit doesn't allow
-        # picking while a transaction is open).
-        TransactionManager.Instance.ForceCloseTransaction()
         changed_count += changed_here
 
         for w in clashes:
@@ -615,15 +652,9 @@ def run_one_renumber(view, form):
 
 
 try:
-    run_trigger = True
-    try:
-        run_trigger = bool(IN[0])
-    except Exception:
-        run_trigger = True
-
-    if not run_trigger:
-        status_message = "Run input is False. Set the 'Run' Boolean to True and run the graph."
-    elif uidoc is None:
+    # IN[0]'s value is ignored on purpose: the Boolean wired to it is only a
+    # re-run trigger, flipped by arm_rerun() at the end of every run.
+    if uidoc is None:
         status_message = "No active Revit document/UI found."
     else:
         view = uidoc.ActiveView
@@ -647,7 +678,8 @@ except Exception:
     status_message = "The tool encountered an error and stopped safely. See debug info for details."
     debug_info.append(traceback.format_exc())
 
-# Finished (or cancelled): clear the blue highlight.
+# Finished (or cancelled): clear the blue highlight and arm the next Run.
 highlight([])
+arm_rerun()
 
 OUT = (renamed_windows, changed_count, report_lines, status_message, debug_info)
