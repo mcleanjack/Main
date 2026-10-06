@@ -26,6 +26,11 @@
 #      walls: both faces of the Structure layer.
 #      Other walls with no Structure layer are skipped (IN[4] can include
 #      them).
+#      PORCH / ALFRESCO SLABS: these usually have no walls round them, so
+#      the edges of any slab (Floor / Structural Foundation) under a room
+#      named Porch or Alfresco are treated like external walls: picked up
+#      where the line crosses them, as the overall end of the string, and
+#      as visible corners (see PORCH_ROOM_WORDS).
 #   3. Creates ONE continuous linear dimension string through all of those
 #      faces. Lines drawn as a connected stepped path (ends touching) are
 #      treated as one: all the runs going the same direction are merged
@@ -101,7 +106,7 @@ from Autodesk.Revit.DB import (
     ShellLayerType, PlanarFace, MaterialFunctionAssignment, WallFunction,
     ViewPlan, PlanViewPlane, DimensionType, DimensionStyleType,
     BuiltInParameter, BuiltInCategory, RevitLinkInstance,
-    ElementMulticategoryFilter
+    ElementMulticategoryFilter, Solid, Options, ViewDetailLevel
 )
 from System.Collections.Generic import List as NetList
 from Autodesk.Revit.UI.Selection import ObjectType
@@ -119,7 +124,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-02 look-1"
+SCRIPT_VERSION = "2026-10-06 porch-1"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -1108,26 +1113,208 @@ def look_sign(view, axis):
     return sign if LOOK == "up" else -sign
 
 
-def external_points(view, axis, members, notes):
-    """[(s, Reference)] for external walls the line doesn't have to cross:
-    the outermost external wall at each end, and the steps in the facade
-    seen from the line's side."""
+# ----------------------------------------------------------------------------
+# Porch / alfresco slabs
+# ----------------------------------------------------------------------------
+
+# A porch or alfresco usually has no walls round it, so the string also
+# snaps to the edges of any slab (Floor / Structural Foundation) under a
+# room whose name contains one of these words (not case-sensitive). Those
+# edges are treated like external walls: picked up where the line crosses
+# them, as the overall end of the string, and as visible corners.
+ADD_PORCH_SLABS = True
+PORCH_ROOM_WORDS = ["porch", "alfresco"]
+PORCH_PROBE_IN = 300 * MM    # look for the room this far inside the edge
+PORCH_MERGE_TOL = 20 * MM    # a slab edge this close to a wall point is
+                             # left out (no tiny 10 mm segments)
+OUTLINE_PROBE = 0.15         # ~45 mm: probe just outside a slab edge
+VERTICAL_TOL = 0.01          # |normal.Z| below this = a vertical face
+
+
+def collect_slabs(view):
+    """Floors and Structural Foundation slabs visible in the view."""
+    cats = NetList[BuiltInCategory]()
+    cats.Add(BuiltInCategory.OST_Floors)
+    cats.Add(BuiltInCategory.OST_StructuralFoundation)
+    try:
+        return list(FilteredElementCollector(doc, view.Id)
+                    .WherePasses(ElementMulticategoryFilter(cats))
+                    .WhereElementIsNotElementType())
+    except Exception:
+        return []
+
+
+def slab_faces(element):
+    """Planar faces of the slab's own solids, with references so they can
+    be dimensioned (footing families etc. are skipped)."""
+    opt = Options()
+    opt.ComputeReferences = True
+    opt.DetailLevel = ViewDetailLevel.Fine
+    try:
+        geometry = element.get_Geometry(opt)
+    except Exception:
+        return []
+    faces = []
+    if geometry is None:
+        return faces
+    for obj in geometry:
+        if not isinstance(obj, Solid):
+            continue
+        try:
+            if obj.Faces.Size == 0 or obj.Volume <= 0:
+                continue
+        except Exception:
+            continue
+        for face in obj.Faces:
+            if isinstance(face, PlanarFace) and face.Reference is not None:
+                faces.append(face)
+    return faces
+
+
+def _top_faces(slabs):
+    """Top faces of the slabs, to tell outline edges from step edges."""
+    faces = []
+    for slab in slabs:
+        try:
+            for ref in HostObjectUtils.GetTopFaces(slab):
+                face = slab.GetGeometryObjectFromReference(ref)
+                if face is not None:
+                    faces.append(face)
+        except Exception:
+            continue
+    return faces
+
+
+def _on_a_slab(point, top_faces):
+    """True if a slab's top face is directly above / below this point."""
+    for face in top_faces:
+        try:
+            res = face.Project(point)
+            if res is None:
+                continue
+            q = res.XYZPoint
+            if math.hypot(q.X - point.X, q.Y - point.Y) < 0.01:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def is_porch_room(room):
+    name = room_label(room, False).lower()
+    return any(word in name for word in PORCH_ROOM_WORDS)
+
+
+def _edge_samples(face):
+    """Points spread along a vertical slab edge face (plan positions)."""
+    bb = face.GetBoundingBox()
+    fractions = [0.1, 0.3, 0.5, 0.7, 0.9]
+    um = (bb.Min.U + bb.Max.U) / 2.0
+    vm = (bb.Min.V + bb.Max.V) / 2.0
+    points = []
+    for f in fractions:
+        points.append(face.Evaluate(UV(bb.Min.U + (bb.Max.U - bb.Min.U) * f,
+                                       vm)))
+        points.append(face.Evaluate(UV(um, bb.Min.V
+                                       + (bb.Max.V - bb.Min.V) * f)))
+    return points
+
+
+def _is_porch_edge(face, n, tops, rooms):
+    """True if this slab edge is on the slab outline (no slab just beyond
+    it) and has a Porch / Alfresco room just inside it."""
+    samples = _edge_samples(face)
+    centre = samples[4]
+    if _on_a_slab(centre.Add(n.Multiply(OUTLINE_PROBE)), tops):
+        return False        # a step between slabs, not the outline
+    for p in samples:
+        room = rooms.find(flat(p).Subtract(n.Multiply(PORCH_PROBE_IN)))
+        if room is not None and is_porch_room(room):
+            return True
+    return False
+
+
+def porch_faces(view, axis, perp, first, rooms):
+    """Outline edges of Porch / Alfresco slabs, split like
+    _external_faces: facades [(side, s0, s1, depth)] running along the
+    string, and returns [(s, sign, d0, d1, None, ref)] square to it."""
+    facades, returns = [], []
+    if not ADD_PORCH_SLABS or rooms is None:
+        return facades, returns
+    slabs = collect_slabs(view)
+    if not slabs:
+        return facades, returns
+    tops = _top_faces(slabs)
+    for slab in slabs:
+        for face in slab_faces(slab):
+            try:
+                n = face.FaceNormal
+                if abs(n.Z) > VERTICAL_TOL:
+                    continue        # top, bottom or sloped face
+                n = flat(n)
+                if n.GetLength() < 1e-9:
+                    continue
+                n = n.Normalize()
+                along = abs(n.DotProduct(perp)) >= PARALLEL_COS
+                square = abs(n.DotProduct(axis)) >= PARALLEL_COS
+                if not (along or square):
+                    continue
+                if not _is_porch_edge(face, n, tops, rooms):
+                    continue
+                s0, s1, d0, d1 = _face_extent(face, axis, perp, first)
+                if along:
+                    side = 1.0 if n.DotProduct(perp) > 0 else -1.0
+                    facades.append((side, s0, s1, (d0 + d1) / 2.0))
+                else:
+                    s = (flat(face.Origin).Subtract(first.a).DotProduct(axis)
+                         + first.s_a)
+                    sign = 1.0 if n.DotProduct(axis) > 0 else -1.0
+                    returns.append((s, sign, d0, d1, None, face.Reference))
+            except Exception:
+                continue
+    return facades, returns
+
+
+def porch_crossings(members, perp, porch_returns):
+    """[(s, Reference)] of Porch / Alfresco slab edges the lines cross."""
+    out = []
+    for line in members:
+        line_d = line.a.DotProduct(perp)
+        for r in porch_returns:
+            if (line.s_a - DEDUP_TOL <= r[0] <= line.s_b + DEDUP_TOL
+                    and r[2] - DEDUP_TOL <= line_d <= r[3] + DEDUP_TOL):
+                out.append((r[0], r[5]))
+    return out
+
+
+def external_points(view, axis, members, notes, porch=None):
+    """[(s, Reference, is_slab)] for external walls the line doesn't have
+    to cross: the outermost external wall at each end, and the steps in
+    the facade seen from the line's side. porch = porch_faces(...): Porch /
+    Alfresco slab edges, used like external walls."""
     first = members[0]
     perp = XYZ(-axis.Y, axis.X, 0.0)
     dim_line = Line.CreateBound(XYZ(first.a.X, first.a.Y, first.z),
                                 XYZ(first.b.X, first.b.Y, first.z))
-    facades, returns = _external_faces(view, axis, perp, first)
-    picked = []     # (s, sign, wall, ref)
+    facades, wall_returns = _external_faces(view, axis, perp, first)
+    returns = list(wall_returns)
+    if porch:
+        facades = facades + porch[0]
+        returns = returns + porch[1]
+    picked = []     # (s, sign, wall or None for a slab edge, ref)
 
     if ADD_OVERALL_EXTERNAL:
-        lows = [r for r in returns if r[1] < 0]
-        highs = [r for r in returns if r[1] > 0]
-        if lows:
-            r = min(lows, key=lambda r: r[0])
-            picked.append((r[0], r[1], r[4], r[5]))
-        if highs:
-            r = max(highs, key=lambda r: r[0])
-            picked.append((r[0], r[1], r[4], r[5]))
+        # The outermost external wall at each end, and the outermost
+        # Porch / Alfresco slab edge if that sticks out further.
+        for candidates in (wall_returns, returns):
+            lows = [r for r in candidates if r[1] < 0]
+            highs = [r for r in candidates if r[1] > 0]
+            if lows:
+                r = min(lows, key=lambda r: r[0])
+                picked.append((r[0], r[1], r[4], r[5]))
+            if highs:
+                r = max(highs, key=lambda r: r[0])
+                picked.append((r[0], r[1], r[4], r[5]))
 
     if ADD_FACADE_STEPS:
         line_d = first.a.DotProduct(perp)
@@ -1148,17 +1335,21 @@ def external_points(view, axis, members, notes):
 
     out, seen = [], set()
     for s, sign, wall, ref in picked:
-        key = (str(wall.Id), round(s, 3))
+        key = (str(wall.Id) if wall is not None else "slab", round(s, 3))
         if key in seen:
             continue
         seen.add(key)
+        if wall is None:
+            out.append((s, ref, True))      # Porch / Alfresco slab edge
+            continue
         point = _outer_point(wall, ref, s, sign, dim_line, view, notes)
         if point is not None:
-            out.append(point)
+            out.append((point[0], point[1], False))
     return out
 
 
-def group_hits(view, axis, members, include_others, stats, notes, pick_z):
+def group_hits(view, axis, members, include_others, stats, notes, pick_z,
+               rooms=None):
     """Every wall face crossed by any line in the group, as a sorted,
     de-duplicated list of (s, Reference), s = distance along the axis."""
     hits = []
@@ -1169,13 +1360,21 @@ def group_hits(view, axis, members, include_others, stats, notes, pick_z):
                                         dim_line, include_others,
                                         stats, notes, pick_z):
             hits.append((line.s_a + t, ref))
-    if (ADD_OVERALL_EXTERNAL or ADD_FACADE_STEPS) and hits:
+    if hits:
         # Only for a run that crosses walls, so a jog between runs doesn't
         # get a string of its own. Points the line already has are skipped.
-        for s, ref in external_points(view, axis, members, notes):
-            if all(abs(s - h[0]) >= DEDUP_TOL for h in hits):
+        first = members[0]
+        perp = XYZ(-axis.Y, axis.X, 0.0)
+        porch = porch_faces(view, axis, perp, first, rooms)
+        extra = [(s, ref, True)
+                 for s, ref in porch_crossings(members, perp, porch[1])]
+        if ADD_OVERALL_EXTERNAL or ADD_FACADE_STEPS:
+            extra += external_points(view, axis, members, notes, porch)
+        for s, ref, is_slab in extra:
+            tol = PORCH_MERGE_TOL if is_slab else DEDUP_TOL
+            if all(abs(s - h[0]) >= tol for h in hits):
                 hits.append((s, ref))
-                stats["overall"] += 1
+                stats["porch" if is_slab else "overall"] += 1
     hits.sort(key=lambda h: h[0])
     deduped = []
     for s, ref in hits:
@@ -1230,9 +1429,9 @@ def dimension_group(view, axis, members, dim_type, include_number, rooms,
     Returns (Dimension or None, message)."""
     notes = []
     stats = {"structure": 0, "core": 0, "finish": 0, "skipped": 0,
-             "outer": 0, "overall": 0}
+             "outer": 0, "overall": 0, "porch": 0}
     hits = group_hits(view, axis, members, include_others, stats, notes,
-                      pick_z)
+                      pick_z, rooms)
     ids = ", ".join(str(line.element.Id) for line in members)
     label = "Line" if len(members) == 1 else "Lines"
     if len(hits) < 2:
@@ -1279,7 +1478,8 @@ def dimension_group(view, axis, members, dim_type, include_number, rooms,
     parts = ["%d on Structure layer" % stats["structure"],
              "%d brick external with outer face" % stats["outer"],
              "%d external wall point(s) added beyond the line"
-             % stats["overall"]]
+             % stats["overall"],
+             "%d Porch/Alfresco slab edge(s)" % stats["porch"]]
     if include_others:
         parts.append("%d on core" % stats["core"])
         parts.append("%d on finish faces" % stats["finish"])

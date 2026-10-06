@@ -118,6 +118,44 @@ the line doesn't cross that wall:
   detached garage or another building, crop or hide it if its walls
   shouldn't count.
 
+### Porch and alfresco slabs
+
+A porch or alfresco usually has no walls round it, so the string also
+snaps to the **slab edges** under any room named **Porch** or
+**Alfresco** (anywhere in the name, not case-sensitive, e.g.
+"Front Porch", "ALFRESCO"). Those slab edges are treated like external
+walls:
+
+- **Crossed by the line:** e.g. a line running up through the alfresco
+  picks up the alfresco slab's outer edge.
+- **Overall ends:** if the porch/alfresco slab sticks out past the
+  outermost external wall, its edge is added as the end of the string
+  (the wall is still dimensioned too).
+- **Visible corners:** porch/alfresco slab edges count in the "what you
+  can see from the line" outline above, with the same pop-up look
+  direction.
+
+How a slab edge qualifies:
+- It's a vertical edge face of a **Floor** or **Structural Foundation**
+  slab visible in the view.
+- A Porch/Alfresco room is found **300 mm inside** the edge. The rooms can
+  be in this model or a linked model, using the same design-option rules
+  as the room names.
+- It's on the slab **outline**: an edge where another slab carries on just
+  beyond it (e.g. where a set-down porch slab meets the house slab) is
+  left out.
+- A slab edge within **20 mm** of a wall point already on the string is
+  left out, so you don't get tiny segments.
+
+Notes:
+- The report counts them, e.g. `2 Porch/Alfresco slab edge(s)`.
+- If the porch room's boundary (room separation lines) sits more than
+  300 mm in from the slab edge, the edge isn't found. Draw the separation
+  lines on the slab edge, or raise `PORCH_PROBE_IN`.
+- The room words are `PORCH_ROOM_WORDS = ["porch", "alfresco"]` near the
+  top of the script (add e.g. `"patio"` or `"deck"`). Turn this off with
+  `ADD_PORCH_SLABS = False`.
+
 ### External walls: outer face (brick walls only)
 
 **Only external walls with brick** get the outer face. A wall counts as
