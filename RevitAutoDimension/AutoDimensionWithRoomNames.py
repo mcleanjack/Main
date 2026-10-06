@@ -124,7 +124,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-06 porch-1"
+SCRIPT_VERSION = "2026-10-06 look-2"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -1097,194 +1097,33 @@ def _facade_steps(facades, line_d, look=0):
 
 def look_sign(view, axis):
     """+1 / -1 / 0: which side of the string (along perp = axis turned
-    90 degrees) you're looking towards, from the pop-up's LOOK choice.
-    'up' means up the view for strings running across it, and left for
-    strings running up it."""
-    if LOOK not in ("up", "down"):
-        return 0
+    90 degrees) you're looking towards, from the pop-up's choices.
+    Strings running across the view use the horizontal-line choice
+    (up / down / both); strings running up the view use the vertical-line
+    choice (left / right / both)."""
+    look_h, look_v = LOOK
     perp = XYZ(-axis.Y, axis.X, 0.0)
     try:
         right, up = view.RightDirection, view.UpDirection
-        across = abs(axis.DotProduct(right)) >= abs(axis.DotProduct(up))
-        towards = up if across else right.Negate()
     except Exception:
-        towards = XYZ(0, 1, 0)
-    sign = 1 if perp.DotProduct(towards) >= 0 else -1
-    return sign if LOOK == "up" else -sign
-
-
-# ----------------------------------------------------------------------------
-# Porch / alfresco slabs
-# ----------------------------------------------------------------------------
-
-# A porch or alfresco usually has no walls round it, so the string also
-# snaps to the edges of any slab (Floor / Structural Foundation) under a
-# room whose name contains one of these words (not case-sensitive). Those
-# edges are treated like external walls: picked up where the line crosses
-# them, as the overall end of the string, and as visible corners.
-ADD_PORCH_SLABS = True
-PORCH_ROOM_WORDS = ["porch", "alfresco"]
-PORCH_PROBE_IN = 300 * MM    # look for the room this far inside the edge
-PORCH_MERGE_TOL = 20 * MM    # a slab edge this close to a wall point is
-                             # left out (no tiny 10 mm segments)
-OUTLINE_PROBE = 0.15         # ~45 mm: probe just outside a slab edge
-VERTICAL_TOL = 0.01          # |normal.Z| below this = a vertical face
-
-
-def collect_slabs(view):
-    """Floors and Structural Foundation slabs visible in the view."""
-    cats = NetList[BuiltInCategory]()
-    cats.Add(BuiltInCategory.OST_Floors)
-    cats.Add(BuiltInCategory.OST_StructuralFoundation)
-    try:
-        return list(FilteredElementCollector(doc, view.Id)
-                    .WherePasses(ElementMulticategoryFilter(cats))
-                    .WhereElementIsNotElementType())
-    except Exception:
-        return []
-
-
-def slab_faces(element):
-    """Planar faces of the slab's own solids, with references so they can
-    be dimensioned (footing families etc. are skipped)."""
-    opt = Options()
-    opt.ComputeReferences = True
-    opt.DetailLevel = ViewDetailLevel.Fine
-    try:
-        geometry = element.get_Geometry(opt)
-    except Exception:
-        return []
-    faces = []
-    if geometry is None:
-        return faces
-    for obj in geometry:
-        if not isinstance(obj, Solid):
-            continue
-        try:
-            if obj.Faces.Size == 0 or obj.Volume <= 0:
-                continue
-        except Exception:
-            continue
-        for face in obj.Faces:
-            if isinstance(face, PlanarFace) and face.Reference is not None:
-                faces.append(face)
-    return faces
-
-
-def _top_faces(slabs):
-    """Top faces of the slabs, to tell outline edges from step edges."""
-    faces = []
-    for slab in slabs:
-        try:
-            for ref in HostObjectUtils.GetTopFaces(slab):
-                face = slab.GetGeometryObjectFromReference(ref)
-                if face is not None:
-                    faces.append(face)
-        except Exception:
-            continue
-    return faces
-
-
-def _on_a_slab(point, top_faces):
-    """True if a slab's top face is directly above / below this point."""
-    for face in top_faces:
-        try:
-            res = face.Project(point)
-            if res is None:
-                continue
-            q = res.XYZPoint
-            if math.hypot(q.X - point.X, q.Y - point.Y) < 0.01:
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def is_porch_room(room):
-    name = room_label(room, False).lower()
-    return any(word in name for word in PORCH_ROOM_WORDS)
-
-
-def _edge_samples(face):
-    """Points spread along a vertical slab edge face (plan positions)."""
-    bb = face.GetBoundingBox()
-    fractions = [0.1, 0.3, 0.5, 0.7, 0.9]
-    um = (bb.Min.U + bb.Max.U) / 2.0
-    vm = (bb.Min.V + bb.Max.V) / 2.0
-    points = []
-    for f in fractions:
-        points.append(face.Evaluate(UV(bb.Min.U + (bb.Max.U - bb.Min.U) * f,
-                                       vm)))
-        points.append(face.Evaluate(UV(um, bb.Min.V
-                                       + (bb.Max.V - bb.Min.V) * f)))
-    return points
-
-
-def _is_porch_edge(face, n, tops, rooms):
-    """True if this slab edge is on the slab outline (no slab just beyond
-    it) and has a Porch / Alfresco room just inside it."""
-    samples = _edge_samples(face)
-    centre = samples[4]
-    if _on_a_slab(centre.Add(n.Multiply(OUTLINE_PROBE)), tops):
-        return False        # a step between slabs, not the outline
-    for p in samples:
-        room = rooms.find(flat(p).Subtract(n.Multiply(PORCH_PROBE_IN)))
-        if room is not None and is_porch_room(room):
-            return True
-    return False
-
-
-def porch_faces(view, axis, perp, first, rooms):
-    """Outline edges of Porch / Alfresco slabs, split like
-    _external_faces: facades [(side, s0, s1, depth)] running along the
-    string, and returns [(s, sign, d0, d1, None, ref)] square to it."""
-    facades, returns = [], []
-    if not ADD_PORCH_SLABS or rooms is None:
-        return facades, returns
-    slabs = collect_slabs(view)
-    if not slabs:
-        return facades, returns
-    tops = _top_faces(slabs)
-    for slab in slabs:
-        for face in slab_faces(slab):
-            try:
-                n = face.FaceNormal
-                if abs(n.Z) > VERTICAL_TOL:
-                    continue        # top, bottom or sloped face
-                n = flat(n)
-                if n.GetLength() < 1e-9:
-                    continue
-                n = n.Normalize()
-                along = abs(n.DotProduct(perp)) >= PARALLEL_COS
-                square = abs(n.DotProduct(axis)) >= PARALLEL_COS
-                if not (along or square):
-                    continue
-                if not _is_porch_edge(face, n, tops, rooms):
-                    continue
-                s0, s1, d0, d1 = _face_extent(face, axis, perp, first)
-                if along:
-                    side = 1.0 if n.DotProduct(perp) > 0 else -1.0
-                    facades.append((side, s0, s1, (d0 + d1) / 2.0))
-                else:
-                    s = (flat(face.Origin).Subtract(first.a).DotProduct(axis)
-                         + first.s_a)
-                    sign = 1.0 if n.DotProduct(axis) > 0 else -1.0
-                    returns.append((s, sign, d0, d1, None, face.Reference))
-            except Exception:
-                continue
-    return facades, returns
-
-
-def porch_crossings(members, perp, porch_returns):
-    """[(s, Reference)] of Porch / Alfresco slab edges the lines cross."""
-    out = []
-    for line in members:
-        line_d = line.a.DotProduct(perp)
-        for r in porch_returns:
-            if (line.s_a - DEDUP_TOL <= r[0] <= line.s_b + DEDUP_TOL
-                    and r[2] - DEDUP_TOL <= line_d <= r[3] + DEDUP_TOL):
-                out.append((r[0], r[5]))
-    return out
+        right, up = XYZ(1, 0, 0), XYZ(0, 1, 0)
+    if abs(axis.DotProduct(right)) >= abs(axis.DotProduct(up)):
+        # Line runs across the view: look up or down.
+        if look_h == "up":
+            towards = up
+        elif look_h == "down":
+            towards = up.Negate()
+        else:
+            return 0
+    else:
+        # Line runs up the view: look left or right.
+        if look_v == "left":
+            towards = right.Negate()
+        elif look_v == "right":
+            towards = right
+        else:
+            return 0
+    return 1 if perp.DotProduct(towards) >= 0 else -1
 
 
 def external_points(view, axis, members, notes, porch=None):
@@ -1506,27 +1345,39 @@ CANCELLED = object()
 
 
 LOOK_FILE = os.path.join(tempfile.gettempdir(), "AutoDimension_look.txt")
-LOOK_CHOICES = [
-    ("up", "Look up the view (or left, for lines running up the view)"),
-    ("down", "Look down the view (or right, for lines running up it)"),
+LOOK_CHOICES_H = [
+    ("up", "Look up the view (at the house above the line)"),
+    ("down", "Look down the view (at the house below the line)"),
     ("both", "Both sides (outer walls facing back towards the line)"),
 ]
-LOOK = "both"
+LOOK_CHOICES_V = [
+    ("left", "Look left (at the house left of the line)"),
+    ("right", "Look right (at the house right of the line)"),
+    ("both", "Both sides (outer walls facing back towards the line)"),
+]
+LOOK = ("both", "both")     # (horizontal lines, vertical lines)
 
 
 def load_look():
+    """(horizontal choice, vertical choice) from the last pop-up."""
     try:
         with open(LOOK_FILE) as f:
-            value = f.read().strip()
-            return value if value in ("up", "down", "both") else "both"
+            parts = f.read().strip().split(",")
     except Exception:
-        return "both"
+        return ("both", "both")
+    if len(parts) == 1:
+        # Older single setting: up meant left on vertical lines.
+        old = {"up": ("up", "left"), "down": ("down", "right")}
+        return old.get(parts[0], ("both", "both"))
+    h = parts[0] if parts[0] in ("up", "down", "both") else "both"
+    v = parts[1] if parts[1] in ("left", "right", "both") else "both"
+    return (h, v)
 
 
 def save_look(value):
     try:
         with open(LOOK_FILE, "w") as f:
-            f.write(value)
+            f.write("%s,%s" % value)
     except Exception:
         pass
 
@@ -1556,7 +1407,8 @@ def ask_pick_height():
     clr.AddReference('System.Drawing')
     from System.Windows.Forms import (
         Form, Label, TextBox, CheckBox, Button, DialogResult,
-        FormStartPosition, FormBorderStyle, MessageBox, RadioButton)
+        FormStartPosition, FormBorderStyle, MessageBox, RadioButton,
+        GroupBox)
     from System.Drawing import Point, Size
 
     last = load_last_height()
@@ -1564,7 +1416,7 @@ def ask_pick_height():
 
     form = Form()
     form.Text = "Auto-Dimension"
-    form.ClientSize = Size(400, 290)
+    form.ClientSize = Size(400, 420)
     form.StartPosition = FormStartPosition.CenterScreen
     form.FormBorderStyle = FormBorderStyle.FixedDialog
     form.MaximizeBox = False
@@ -1604,25 +1456,40 @@ def ask_pick_height():
     look_label.Location = Point(15, 115)
     look_label.Size = Size(375, 32)
     form.Controls.Add(look_label)
-    radios = []
-    for i, (key, text) in enumerate(LOOK_CHOICES):
-        radio = RadioButton()
-        radio.Text = text
-        radio.Location = Point(15, 148 + i * 26)
-        radio.Size = Size(375, 24)
-        radio.Checked = (key == last_look)
-        form.Controls.Add(radio)
-        radios.append((key, radio))
+
+    def radio_group(title, choices, current, top):
+        # Each group in its own box, so the two sets of options are
+        # chosen separately.
+        group = GroupBox()
+        group.Text = title
+        group.Location = Point(15, top)
+        group.Size = Size(375, 105)
+        form.Controls.Add(group)
+        radios = []
+        for i, (key, text) in enumerate(choices):
+            radio = RadioButton()
+            radio.Text = text
+            radio.Location = Point(10, 20 + i * 26)
+            radio.Size = Size(355, 24)
+            radio.Checked = (key == current)
+            group.Controls.Add(radio)
+            radios.append((key, radio))
+        return radios
+
+    radios_h = radio_group("Horizontal lines (running across the view)",
+                           LOOK_CHOICES_H, last_look[0], 150)
+    radios_v = radio_group("Vertical lines (running up the view)",
+                           LOOK_CHOICES_V, last_look[1], 262)
 
     ok = Button()
     ok.Text = "OK - pick lines"
-    ok.Location = Point(185, 245)
+    ok.Location = Point(185, 377)
     ok.Size = Size(110, 30)
     form.Controls.Add(ok)
 
     cancel = Button()
     cancel.Text = "Cancel"
-    cancel.Location = Point(305, 245)
+    cancel.Location = Point(305, 377)
     cancel.Size = Size(80, 30)
     cancel.DialogResult = DialogResult.Cancel
     form.Controls.Add(cancel)
@@ -1645,7 +1512,8 @@ def ask_pick_height():
 
     if form.ShowDialog() != DialogResult.OK:
         return CANCELLED
-    look = next((key for key, radio in radios if radio.Checked), "both")
+    look = (next((key for key, radio in radios_h if radio.Checked), "both"),
+            next((key for key, radio in radios_v if radio.Checked), "both"))
     save_look(look)
     if auto.Checked:
         save_last_height("")

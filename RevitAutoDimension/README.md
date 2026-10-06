@@ -98,15 +98,18 @@ the line doesn't cross that wall:
   **nearest the line** counts, so walls hidden behind it don't. Its
   corners (where that outline steps in or out) are dimensioned.
 - **Which way you're looking (pop-up):** the pop-up that asks for the
-  pick-up height also asks which way you're looking from the line. It
-  remembers your last choice:
-  - **Look up the view** (or **left**, for lines running up the view): only
-    external corners **ahead of the line** in that direction are added.
-    For a line through an **S-bend**, you get the corner ahead of you and
-    not the one behind.
-  - **Look down the view** (or **right**): the opposite.
-  - **Both sides:** outer walls facing back towards the line, on either
-    side.
+  pick-up height also asks which way you're looking from the line. It has
+  a separate choice for **horizontal lines** (running across the view) and
+  for **vertical lines** (running up the view), and remembers both:
+
+  | Horizontal lines | Vertical lines | Adds |
+  |---|---|---|
+  | **Look up the view** | **Look left** | only external corners of the house on **that side** of the line, ahead of you. For a line through an **S-bend**, you get the corner ahead of you and not the one behind. |
+  | **Look down the view** | **Look right** | the same, on the other side. |
+  | **Both sides** | **Both sides** | outer walls facing back towards the line, on either side. |
+
+  Each string uses the choice for its own direction, so a stepped path
+  with horizontal and vertical runs uses both.
 - If the height is wired in (so there's no pop-up), the last choice made
   in the pop-up is used.
 - Only **external** walls count (type Function = Exterior). Points the line
