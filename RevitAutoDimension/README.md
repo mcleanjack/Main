@@ -199,6 +199,14 @@ The report names each skipped wall and why, e.g.
 
 ## 3. Building the graph in Dynamo
 
+**Ready-made graph:** `AutoDimension.dyn` in this folder is the finished
+graph (Boolean → Python Script (CPython3, with this script inside) →
+Watch, Manual run mode). Save it in a **trusted folder**, open it from
+**Manage → Dynamo → Open** (or Dynamo Player), and click **Run**. It
+contains the same code as `AutoDimensionWithRoomNames.py` at the time it
+was generated; the Watch's first line shows the version. To build it
+yourself instead, follow the steps below.
+
 **Simplest: one node**
 
 1. In Revit, open **Manage → Dynamo** and start a new graph.
