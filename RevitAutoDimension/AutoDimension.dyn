@@ -1,5 +1,5 @@
 {
-  "Uuid": "507887ef-086b-49b7-b837-2f86710d03bb",
+  "Uuid": "bfd2608f-5201-4c2a-8bda-e558d431d9cc",
   "IsCustomNode": false,
   "Description": "Wall auto-dimension with room names. Click Run, pick the line(s), Finish.",
   "Name": "AutoDimension",
@@ -13,11 +13,11 @@
       "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
       "NodeType": "BooleanInputNode",
       "InputValue": true,
-      "Id": "58fcc69a1dce448d9c7fa380b95391bf",
+      "Id": "8bd964f02fd9459bb8841cd05d41a9fd",
       "Inputs": [],
       "Outputs": [
         {
-          "Id": "0761f0f469cb4f04bc9ca88d2d7f3b7e",
+          "Id": "6b21298355fc43a386bd8063d288f35d",
           "Name": "",
           "Description": "Boolean",
           "UsingDefaultValue": false,
@@ -36,10 +36,10 @@
       "Engine": "CPython3",
       "EngineName": "CPython3",
       "VariableInputPorts": true,
-      "Id": "960843d6eade41f3bdb73ecad05d46f1",
+      "Id": "3ec0771dddd94ee3a5df34d72fc704af",
       "Inputs": [
         {
-          "Id": "ad579172a8914ecd8771882f05fa139b",
+          "Id": "1771dd22f73a410185712e705b74a82c",
           "Name": "IN[0]",
           "Description": "Input #0",
           "UsingDefaultValue": false,
@@ -50,7 +50,7 @@
       ],
       "Outputs": [
         {
-          "Id": "95cd05abd21d4254965d762574ebce09",
+          "Id": "bfa45257a2964039804bb54d9882ddf0",
           "Name": "OUT",
           "Description": "Result of the python script",
           "UsingDefaultValue": false,
@@ -65,10 +65,10 @@
     {
       "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
       "NodeType": "ExtensionNode",
-      "Id": "153f456706da4663b5a86dfa45a349de",
+      "Id": "df908f36f0204c71b6bb630c189de11c",
       "Inputs": [
         {
-          "Id": "5974f79cb98a4f99b578141ed839aaeb",
+          "Id": "e1a95f8171074046bb16092afda4767a",
           "Name": "",
           "Description": "Node to show output from",
           "UsingDefaultValue": false,
@@ -79,7 +79,7 @@
       ],
       "Outputs": [
         {
-          "Id": "0248c42b95bd410fa06221b4ad7f6fb2",
+          "Id": "136b1d854fae466d9f5275e40f76f075",
           "Name": "",
           "Description": "Node output",
           "UsingDefaultValue": false,
@@ -94,15 +94,15 @@
   ],
   "Connectors": [
     {
-      "Start": "0761f0f469cb4f04bc9ca88d2d7f3b7e",
-      "End": "ad579172a8914ecd8771882f05fa139b",
-      "Id": "cb012cc17d39490b931680f2678209bf",
+      "Start": "6b21298355fc43a386bd8063d288f35d",
+      "End": "1771dd22f73a410185712e705b74a82c",
+      "Id": "5455ca446c4945029407e52fb1287e68",
       "IsHidden": "False"
     },
     {
-      "Start": "95cd05abd21d4254965d762574ebce09",
-      "End": "5974f79cb98a4f99b578141ed839aaeb",
-      "Id": "ed9824870a3b4febb2c6a599c5f8f570",
+      "Start": "bfa45257a2964039804bb54d9882ddf0",
+      "End": "e1a95f8171074046bb16092afda4767a",
+      "Id": "f7da92f7af4a4021b168db7498cb138a",
       "IsHidden": "False"
     }
   ],
@@ -134,7 +134,7 @@
       {
         "ShowGeometry": true,
         "Name": "Pick line(s) on screen",
-        "Id": "58fcc69a1dce448d9c7fa380b95391bf",
+        "Id": "8bd964f02fd9459bb8841cd05d41a9fd",
         "IsSetAsInput": false,
         "IsSetAsOutput": false,
         "Excluded": false,
@@ -144,7 +144,7 @@
       {
         "ShowGeometry": true,
         "Name": "Auto-Dimension (walls + room names)",
-        "Id": "960843d6eade41f3bdb73ecad05d46f1",
+        "Id": "3ec0771dddd94ee3a5df34d72fc704af",
         "IsSetAsInput": false,
         "IsSetAsOutput": false,
         "Excluded": false,
@@ -154,7 +154,7 @@
       {
         "ShowGeometry": true,
         "Name": "Report",
-        "Id": "153f456706da4663b5a86dfa45a349de",
+        "Id": "df908f36f0204c71b6bb630c189de11c",
         "IsSetAsInput": false,
         "IsSetAsOutput": false,
         "Excluded": false,
