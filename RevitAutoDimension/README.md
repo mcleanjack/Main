@@ -104,19 +104,20 @@ the line doesn't cross that wall:
 
   | Horizontal lines | Vertical lines | Adds |
   |---|---|---|
-  | **Look up the view** | **Look left** | only external corners of the house on **that side** of the line, ahead of you. For a line through an **S-bend**, you get the corner ahead of you and not the one behind. |
+  | **Look up the view** | **Look left** | only external corners of the house on **that side** of the line, ahead of you, not the corners behind you. |
   | **Look down the view** | **Look right** | the same, on the other side. |
 
   Each string uses the choice for its own direction, so a stepped path
   with horizontal and vertical runs uses both.
 
-  With **Look up / down / left / right**, where the line is **outside**
-  the house (not in a room, or in a Porch/Alfresco room), you only see
-  outer wall faces that **face back towards you**, like standing outside
-  looking at the house. The far side of the house never shows through,
-  e.g. a wall at the back picked up through a gap at a corner. Where the
-  line runs **through** the house (in a room), the nearest outer wall
-  ahead counts whichever way it faces, so the S-bend rule still works.
+  You only see outer wall faces that **face back towards you**, like
+  standing outside looking at the house, so the far side of the house
+  never shows through.
+
+  **Only where the line is outside the house.** Where the line runs
+  **through** the house (in a room), no external corners are added there:
+  inside, the string only snaps to the walls the line actually crosses.
+  Porch and Alfresco rooms count as outside.
 - The report lists the walls these extra points came from, e.g.
   `external walls added beyond the line: 1234567, 1234890`. If a point
   you don't want appears, select that wall by ID (**Manage → Select by
