@@ -114,6 +114,13 @@ the line doesn't cross that wall:
   standing outside looking at the house, so the far side of the house
   never shows through.
 
+  Everything you'd see counts: the outer face of each wall, plus the
+  **ends of walls** (e.g. a wall stopping at the corner of an alfresco)
+  and free-standing **brick piers** modelled as external walls. Wall ends
+  and piers snap to that face itself. Porch/Alfresco slab edges have
+  their own outline, so a slab at floor level never hides a wall corner
+  above it.
+
   **Only where the line is outside the house.** Where the line runs
   **through** the house (in a room), no external corners are added there:
   inside, the string only snaps to the walls the line actually crosses.

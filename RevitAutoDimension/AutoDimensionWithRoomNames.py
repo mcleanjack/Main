@@ -124,7 +124,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-07 inside-1"
+SCRIPT_VERSION = "2026-10-07 outside-1"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -971,19 +971,68 @@ def _face_extent(face, axis, perp, first):
     return min(ss), max(ss), min(ds), max(ds)
 
 
+def _stable(ref):
+    try:
+        return ref.ConvertToStableRepresentation(doc)
+    except Exception:
+        return None
+
+
+def _wall_solid_faces(wall):
+    """Vertical planar faces of the wall's own solid, with references."""
+    opt = Options()
+    opt.ComputeReferences = True
+    try:
+        geometry = wall.get_Geometry(opt)
+    except Exception:
+        return []
+    faces = []
+    if geometry is None:
+        return faces
+    for obj in geometry:
+        if not isinstance(obj, Solid):
+            continue
+        try:
+            if obj.Faces.Size == 0:
+                continue
+        except Exception:
+            continue
+        for face in obj.Faces:
+            try:
+                if (isinstance(face, PlanarFace) and face.Reference is not None
+                        and abs(face.FaceNormal.Z) < 0.01):
+                    faces.append(face)
+            except Exception:
+                continue
+    return faces
+
+
 def _external_faces(view, axis, perp, first):
-    """Exterior faces of the external walls in the view, split into
-    facade faces (square to perp: they run along the string) and return
-    faces (square to the axis: the string can measure to them)."""
+    """Faces of the external walls in the view, split into facade faces
+    (square to perp: they run along the string) [(side, s0, s1, depth)]
+    and return faces (square to the axis: the string can measure to them)
+    [(s, sign, d0, d1, wall, ref, direct)].
+
+    The exterior side faces are used as before (direct False: brick walls
+    give the brick face, others the outer face of the Structure layer).
+    The wall's other vertical faces (its ends, e.g. a brick pier or a wall
+    stopping at a corner, and its inner face) are added too (direct True:
+    that face itself), so what you see from outside isn't missing the
+    ends of walls."""
     facades, returns = [], []
     for wall in collect_walls(view):
         try:
             if wall.WallType.Kind == WallKind.Curtain or not is_external(wall):
                 continue
-            refs = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior)
+            refs = list(HostObjectUtils.GetSideFaces(
+                wall, ShellLayerType.Exterior))
         except Exception:
             continue
+        side_keys = set()
         for ref in refs:
+            key = _stable(ref)
+            if key:
+                side_keys.add(key)
             try:
                 face = wall.GetGeometryObjectFromReference(ref)
                 if not isinstance(face, PlanarFace):
@@ -1000,7 +1049,24 @@ def _external_faces(view, axis, perp, first):
                     s = (flat(face.Origin).Subtract(first.a).DotProduct(axis)
                          + first.s_a)
                     sign = 1.0 if n.DotProduct(axis) > 0 else -1.0
-                    returns.append((s, sign, d0, d1, wall, ref))
+                    returns.append((s, sign, d0, d1, wall, ref, False))
+            except Exception:
+                continue
+        for face in _wall_solid_faces(wall):
+            try:
+                if _stable(face.Reference) in side_keys:
+                    continue        # an exterior side face, done above
+                n = flat(face.FaceNormal).Normalize()
+                s0, s1, d0, d1 = _face_extent(face, axis, perp, first)
+                if abs(n.DotProduct(perp)) >= PARALLEL_COS:
+                    side = 1.0 if n.DotProduct(perp) > 0 else -1.0
+                    facades.append((side, s0, s1, (d0 + d1) / 2.0))
+                elif abs(n.DotProduct(axis)) >= PARALLEL_COS:
+                    s = (flat(face.Origin).Subtract(first.a).DotProduct(axis)
+                         + first.s_a)
+                    sign = 1.0 if n.DotProduct(axis) > 0 else -1.0
+                    returns.append((s, sign, d0, d1, wall, face.Reference,
+                                    True))
             except Exception:
                 continue
     return facades, returns
@@ -1336,62 +1402,76 @@ def line_inside_house(axis, members, rooms):
     return inside
 
 
+def _match_steps(steps, returns):
+    """For each outline step [(s, depth a, depth b)], the return face at
+    that point along the string whose extent reaches across the step."""
+    out = []
+    for s, depth_a, depth_b in steps:
+        lo, hi = min(depth_a, depth_b), max(depth_a, depth_b)
+        best, best_overlap = None, -1.0
+        for r in returns:
+            if abs(r[0] - s) > STEP_MATCH_TOL:
+                continue
+            overlap = min(hi, r[3]) - max(lo, r[2])
+            if overlap < -STEP_MATCH_TOL:
+                continue        # a return face elsewhere along the line
+            if overlap > best_overlap:
+                best, best_overlap = r, overlap
+        if best is not None:
+            out.append(best)
+    return out
+
+
 def external_points(view, axis, members, notes, porch=None, rooms=None,
                     cuts=()):
-    """[(s, Reference, is_slab, wall id)] for external walls the line doesn't have
-    to cross: the outermost external wall at each end, and the steps in
-    the facade seen from the line's side. porch = porch_faces(...): Porch /
-    Alfresco slab edges, used like external walls."""
+    """[(s, Reference, is_slab, wall id)] for external walls the line
+    doesn't have to cross: the outermost external wall at each end, and
+    the corners of the outside of the house seen from the parts of the
+    line outside it. porch = porch_faces(...): Porch / Alfresco slab
+    edges, used like external walls but with their own outline, so a slab
+    at floor level never hides a wall corner (or the other way round)."""
     first = members[0]
     perp = XYZ(-axis.Y, axis.X, 0.0)
     dim_line = Line.CreateBound(XYZ(first.a.X, first.a.Y, first.z),
                                 XYZ(first.b.X, first.b.Y, first.z))
-    facades, wall_returns = _external_faces(view, axis, perp, first)
-    returns = list(wall_returns)
-    if porch:
-        facades = facades + porch[0]
-        returns = returns + porch[1]
-    picked = []     # (s, sign, wall or None for a slab edge, ref)
+    wall_facades, wall_returns = _external_faces(view, axis, perp, first)
+    slab_facades, slab_returns = porch if porch else ([], [])
+    slab_returns = [r[:6] + (True,) for r in slab_returns]
+    picked = []     # return tuples (s, sign, d0, d1, wall, ref, direct)
 
     if ADD_OVERALL_EXTERNAL:
         # The outermost external wall at each end, and the outermost
         # Porch / Alfresco slab edge if that sticks out further.
-        for candidates in (wall_returns, returns):
+        for candidates in (wall_returns, wall_returns + slab_returns):
             lows = [r for r in candidates if r[1] < 0]
             highs = [r for r in candidates if r[1] > 0]
             if lows:
-                r = min(lows, key=lambda r: r[0])
-                picked.append((r[0], r[1], r[4], r[5]))
+                picked.append(min(lows, key=lambda r: r[0]))
             if highs:
-                r = max(highs, key=lambda r: r[0])
-                picked.append((r[0], r[1], r[4], r[5]))
+                picked.append(max(highs, key=lambda r: r[0]))
 
     if ADD_FACADE_STEPS:
         line_d = first.a.DotProduct(perp)
-        for s, depth_a, depth_b in _facade_steps(
-                facades, line_d, look_sign(view, axis),
-                line_inside_house(axis, members, rooms), cuts):
-            lo, hi = min(depth_a, depth_b), max(depth_a, depth_b)
-            best, best_overlap = None, -1.0
-            for r in returns:
-                if abs(r[0] - s) > STEP_MATCH_TOL:
-                    continue
-                overlap = min(hi, r[3]) - max(lo, r[2])
-                if overlap < -STEP_MATCH_TOL:
-                    continue        # a return wall elsewhere along the line
-                if overlap > best_overlap:
-                    best, best_overlap = r, overlap
-            if best is not None:
-                picked.append((best[0], best[1], best[4], best[5]))
+        look = look_sign(view, axis)
+        inside = line_inside_house(axis, members, rooms)
+        for facades, returns in ((wall_facades, wall_returns),
+                                 (slab_facades, slab_returns)):
+            if facades:
+                picked.extend(_match_steps(
+                    _facade_steps(facades, line_d, look, inside, cuts),
+                    returns))
 
     out, seen = [], set()
-    for s, sign, wall, ref in picked:
+    for s, sign, d0, d1, wall, ref, direct in picked:
         key = (str(wall.Id) if wall is not None else "slab", round(s, 3))
         if key in seen:
             continue
         seen.add(key)
         if wall is None:
             out.append((s, ref, True, None))    # Porch / Alfresco slab
+            continue
+        if direct:
+            out.append((s, ref, False, str(wall.Id)))   # wall end etc.
             continue
         point = _outer_point(wall, ref, s, sign, dim_line, view, notes)
         if point is not None:
