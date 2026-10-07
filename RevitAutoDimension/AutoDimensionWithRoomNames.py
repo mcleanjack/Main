@@ -124,7 +124,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-07 outside-1"
+SCRIPT_VERSION = "2026-10-07 outside-2"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -1018,11 +1018,29 @@ def _external_faces(view, axis, perp, first):
     The wall's other vertical faces (its ends, e.g. a brick pier or a wall
     stopping at a corner, and its inner face) are added too (direct True:
     that face itself), so what you see from outside isn't missing the
-    ends of walls."""
+    ends of walls.
+
+    Walls that aren't external (e.g. a boundary / firewall type whose
+    Function isn't Exterior) still block the view: their faces are added
+    to the facades, so nothing behind them is seen, but they give no
+    dimension points."""
     facades, returns = [], []
     for wall in collect_walls(view):
         try:
-            if wall.WallType.Kind == WallKind.Curtain or not is_external(wall):
+            if wall.WallType.Kind == WallKind.Curtain:
+                continue
+            if not is_external(wall):
+                for face in _wall_solid_faces(wall):
+                    try:
+                        n = flat(face.FaceNormal).Normalize()
+                        if abs(n.DotProduct(perp)) < PARALLEL_COS:
+                            continue
+                        s0, s1, d0, d1 = _face_extent(face, axis, perp,
+                                                      first)
+                        side = 1.0 if n.DotProduct(perp) > 0 else -1.0
+                        facades.append((side, s0, s1, (d0 + d1) / 2.0))
+                    except Exception:
+                        continue
                 continue
             refs = list(HostObjectUtils.GetSideFaces(
                 wall, ShellLayerType.Exterior))

@@ -121,6 +121,10 @@ the line doesn't cross that wall:
   their own outline, so a slab at floor level never hides a wall corner
   above it.
 
+  **Any wall blocks the view**, including walls whose type Function isn't
+  Exterior (e.g. a boundary/firewall type). So a wall behind the garage
+  isn't picked up through it. Only external walls give dimension points.
+
   **Only where the line is outside the house.** Where the line runs
   **through** the house (in a room), no external corners are added there:
   inside, the string only snaps to the walls the line actually crosses.
