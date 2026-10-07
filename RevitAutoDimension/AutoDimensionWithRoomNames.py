@@ -124,7 +124,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-06 look-3"
+SCRIPT_VERSION = "2026-10-07 look-4"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -1031,10 +1031,11 @@ def _outer_point(wall, ext_ref, s, sign, dim_line, view, notes):
     return s - sign * offset, ref
 
 
-def _profile_steps(faces, nearest):
+def _profile_steps(faces, nearest, keep=None):
     """Steps in one side's visible outline: [(s, depth a, depth b)].
     faces: [(side, s0, s1, depth)]; nearest picks the face seen at each
-    point along the string (the one closest to the line)."""
+    point along the string (the one closest to the line). keep(face, s),
+    if given, says whether a face can be seen from the line at s."""
     cuts = sorted(set([f[1] for f in faces] + [f[2] for f in faces]))
     profile = []        # (s start, s end, depth or None)
     for s0, s1 in zip(cuts, cuts[1:]):
@@ -1042,7 +1043,8 @@ def _profile_steps(faces, nearest):
             continue
         mid = (s0 + s1) / 2.0
         covering = [f[3] for f in faces
-                    if f[1] - DEDUP_TOL <= mid <= f[2] + DEDUP_TOL]
+                    if f[1] - DEDUP_TOL <= mid <= f[2] + DEDUP_TOL
+                    and (keep is None or keep(f, mid))]
         profile.append((s0, s1, nearest(covering) if covering else None))
     steps = []
     previous = None
@@ -1062,14 +1064,19 @@ def _profile_steps(faces, nearest):
     return steps
 
 
-def _facade_steps(facades, line_d, look=0):
+def _facade_steps(facades, line_d, look=0, inside=None):
     """Corners of the external walls you can see standing on the line:
     [(s, depth a, depth b)].
 
     look = +1 / -1: you're looking one way from the line (the pop-up's
-    Look up / Look down). Only the outer walls AHEAD of the line that way
-    count, whichever way they face, nearest first - so for a line through
-    an S-bend you get the corner ahead of you, not the one behind.
+    Look up / down / left / right). Only the outer walls AHEAD of the line
+    that way count, nearest first - so for a line through an S-bend you
+    get the corner ahead of you, not the one behind. Where the line is
+    OUTSIDE the house (inside(s) is False) you only see outer wall faces
+    facing back towards you, so the far side of the house never shows
+    through a gap in the near side. Where the line runs through the house
+    (inside(s) True) the nearest outer wall ahead counts whichever way it
+    faces.
 
     look = 0 (Both sides):
     A facade face (an exterior face running along the string) is only
@@ -1082,7 +1089,11 @@ def _facade_steps(facades, line_d, look=0):
         ahead = [f for f in facades if (f[3] - line_d) * look > DEDUP_TOL]
         if not ahead:
             return []
-        return _profile_steps(ahead, min if look > 0 else max)
+
+        def keep(face, s):
+            # face[0] * look < 0: the face looks back towards the line.
+            return face[0] * look < 0 or (inside is not None and inside(s))
+        return _profile_steps(ahead, min if look > 0 else max, keep)
     ahead = [f for f in facades
              if f[3] > line_d + DEDUP_TOL and f[0] < 0]     # faces back
     behind = [f for f in facades
@@ -1300,8 +1311,31 @@ def porch_crossings(members, perp, porch_returns):
     return out
 
 
-def external_points(view, axis, members, notes, porch=None):
-    """[(s, Reference, is_slab)] for external walls the line doesn't have
+def line_inside_house(axis, members, rooms):
+    """inside(s): True if the line at s (distance along the string) is in
+    a room of the house. Porch / Alfresco rooms and no room count as
+    outside. Cached, as the same points get asked about more than once."""
+    first = members[0]
+    cache = {}
+
+    def inside(s):
+        key = round(s, 2)
+        if key not in cache:
+            point = None
+            for line in members:
+                if line.s_a - DEDUP_TOL <= s <= line.s_b + DEDUP_TOL:
+                    point = line.a.Add(axis.Multiply(s - line.s_a))
+                    break
+            if point is None:
+                point = first.a.Add(axis.Multiply(s - first.s_a))
+            room = rooms.find(point) if rooms is not None else None
+            cache[key] = room is not None and not is_porch_room(room)
+        return cache[key]
+    return inside
+
+
+def external_points(view, axis, members, notes, porch=None, rooms=None):
+    """[(s, Reference, is_slab, wall id)] for external walls the line doesn't have
     to cross: the outermost external wall at each end, and the steps in
     the facade seen from the line's side. porch = porch_faces(...): Porch /
     Alfresco slab edges, used like external walls."""
@@ -1332,7 +1366,8 @@ def external_points(view, axis, members, notes, porch=None):
     if ADD_FACADE_STEPS:
         line_d = first.a.DotProduct(perp)
         for s, depth_a, depth_b in _facade_steps(
-                facades, line_d, look_sign(view, axis)):
+                facades, line_d, look_sign(view, axis),
+                line_inside_house(axis, members, rooms)):
             lo, hi = min(depth_a, depth_b), max(depth_a, depth_b)
             best, best_overlap = None, -1.0
             for r in returns:
@@ -1353,11 +1388,11 @@ def external_points(view, axis, members, notes, porch=None):
             continue
         seen.add(key)
         if wall is None:
-            out.append((s, ref, True))      # Porch / Alfresco slab edge
+            out.append((s, ref, True, None))    # Porch / Alfresco slab
             continue
         point = _outer_point(wall, ref, s, sign, dim_line, view, notes)
         if point is not None:
-            out.append((point[0], point[1], False))
+            out.append((point[0], point[1], False, str(wall.Id)))
     return out
 
 
@@ -1379,15 +1414,22 @@ def group_hits(view, axis, members, include_others, stats, notes, pick_z,
         first = members[0]
         perp = XYZ(-axis.Y, axis.X, 0.0)
         porch = porch_faces(view, axis, perp, first, rooms)
-        extra = [(s, ref, True)
+        extra = [(s, ref, True, None)
                  for s, ref in porch_crossings(members, perp, porch[1])]
         if ADD_OVERALL_EXTERNAL or ADD_FACADE_STEPS:
-            extra += external_points(view, axis, members, notes, porch)
-        for s, ref, is_slab in extra:
+            extra += external_points(view, axis, members, notes, porch,
+                                     rooms)
+        added = []
+        for s, ref, is_slab, wall_id in extra:
             tol = PORCH_MERGE_TOL if is_slab else DEDUP_TOL
             if all(abs(s - h[0]) >= tol for h in hits):
                 hits.append((s, ref))
                 stats["porch" if is_slab else "overall"] += 1
+                if wall_id and wall_id not in added:
+                    added.append(wall_id)
+        if added:
+            notes.append("external walls added beyond the line: %s"
+                         % ", ".join(added))
     hits.sort(key=lambda h: h[0])
     deduped = []
     for s, ref in hits:

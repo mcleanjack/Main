@@ -110,6 +110,18 @@ the line doesn't cross that wall:
 
   Each string uses the choice for its own direction, so a stepped path
   with horizontal and vertical runs uses both.
+
+  With **Look up / down / left / right**, where the line is **outside**
+  the house (not in a room, or in a Porch/Alfresco room), you only see
+  outer wall faces that **face back towards you**, like standing outside
+  looking at the house. The far side of the house never shows through,
+  e.g. a wall at the back picked up through a gap at a corner. Where the
+  line runs **through** the house (in a room), the nearest outer wall
+  ahead counts whichever way it faces, so the S-bend rule still works.
+- The report lists the walls these extra points came from, e.g.
+  `external walls added beyond the line: 1234567, 1234890`. If a point
+  you don't want appears, select that wall by ID (**Manage → Select by
+  ID**) to see why.
 - If the height is wired in (so there's no pop-up), the last choice made
   in the pop-up is used.
 - Only **external** walls count (type Function = Exterior). Points the line
