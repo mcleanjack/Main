@@ -124,7 +124,7 @@ uiapp = DocumentManager.Instance.CurrentUIApplication
 uidoc = uiapp.ActiveUIDocument if uiapp is not None else None
 
 # Shown at the top of the report, so you can check which copy is running.
-SCRIPT_VERSION = "2026-10-07 look-4"
+SCRIPT_VERSION = "2026-10-07 look-5"
 
 # Internal units are decimal feet.
 DEDUP_TOL = 0.003            # ~1 mm: faces closer than this collapse to one
@@ -1564,14 +1564,12 @@ LOOK_FILE = os.path.join(tempfile.gettempdir(), "AutoDimension_look.txt")
 LOOK_CHOICES_H = [
     ("up", "Look up the view (at the house above the line)"),
     ("down", "Look down the view (at the house below the line)"),
-    ("both", "Both sides (outer walls facing back towards the line)"),
 ]
 LOOK_CHOICES_V = [
     ("left", "Look left (at the house left of the line)"),
     ("right", "Look right (at the house right of the line)"),
-    ("both", "Both sides (outer walls facing back towards the line)"),
 ]
-LOOK = ("both", "both")     # (horizontal lines, vertical lines)
+LOOK = ("up", "left")       # (horizontal lines, vertical lines)
 
 
 def load_look():
@@ -1580,13 +1578,13 @@ def load_look():
         with open(LOOK_FILE) as f:
             parts = f.read().strip().split(",")
     except Exception:
-        return ("both", "both")
+        return LOOK
     if len(parts) == 1:
         # Older single setting: up meant left on vertical lines.
-        old = {"up": ("up", "left"), "down": ("down", "right")}
-        return old.get(parts[0], ("both", "both"))
-    h = parts[0] if parts[0] in ("up", "down", "both") else "both"
-    v = parts[1] if parts[1] in ("left", "right", "both") else "both"
+        old = {"down": ("down", "right")}
+        return old.get(parts[0], LOOK)
+    h = parts[0] if parts[0] in ("up", "down") else LOOK[0]
+    v = parts[1] if parts[1] in ("left", "right") else LOOK[1]
     return (h, v)
 
 
@@ -1632,7 +1630,7 @@ def ask_pick_height():
 
     form = Form()
     form.Text = "Auto-Dimension"
-    form.ClientSize = Size(400, 420)
+    form.ClientSize = Size(400, 370)
     form.StartPosition = FormStartPosition.CenterScreen
     form.FormBorderStyle = FormBorderStyle.FixedDialog
     form.MaximizeBox = False
@@ -1679,7 +1677,7 @@ def ask_pick_height():
         group = GroupBox()
         group.Text = title
         group.Location = Point(15, top)
-        group.Size = Size(375, 105)
+        group.Size = Size(375, 80)
         form.Controls.Add(group)
         radios = []
         for i, (key, text) in enumerate(choices):
@@ -1695,17 +1693,17 @@ def ask_pick_height():
     radios_h = radio_group("Horizontal lines (running across the view)",
                            LOOK_CHOICES_H, last_look[0], 150)
     radios_v = radio_group("Vertical lines (running up the view)",
-                           LOOK_CHOICES_V, last_look[1], 262)
+                           LOOK_CHOICES_V, last_look[1], 237)
 
     ok = Button()
     ok.Text = "OK - pick lines"
-    ok.Location = Point(185, 377)
+    ok.Location = Point(185, 327)
     ok.Size = Size(110, 30)
     form.Controls.Add(ok)
 
     cancel = Button()
     cancel.Text = "Cancel"
-    cancel.Location = Point(305, 377)
+    cancel.Location = Point(305, 327)
     cancel.Size = Size(80, 30)
     cancel.DialogResult = DialogResult.Cancel
     form.Controls.Add(cancel)
@@ -1728,8 +1726,8 @@ def ask_pick_height():
 
     if form.ShowDialog() != DialogResult.OK:
         return CANCELLED
-    look = (next((key for key, radio in radios_h if radio.Checked), "both"),
-            next((key for key, radio in radios_v if radio.Checked), "both"))
+    look = (next((key for key, radio in radios_h if radio.Checked), LOOK[0]),
+            next((key for key, radio in radios_v if radio.Checked), LOOK[1]))
     save_look(look)
     if auto.Checked:
         save_last_height("")

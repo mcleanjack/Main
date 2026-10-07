@@ -106,7 +106,6 @@ the line doesn't cross that wall:
   |---|---|---|
   | **Look up the view** | **Look left** | only external corners of the house on **that side** of the line, ahead of you. For a line through an **S-bend**, you get the corner ahead of you and not the one behind. |
   | **Look down the view** | **Look right** | the same, on the other side. |
-  | **Both sides** | **Both sides** | outer walls facing back towards the line, on either side. |
 
   Each string uses the choice for its own direction, so a stepped path
   with horizontal and vertical runs uses both.
